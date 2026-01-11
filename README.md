@@ -1,31 +1,33 @@
 # 🌧️ Cloudburst Risk Estimation using ERA5 & GPM-IMERG
 
-> **A production-oriented, data-driven system for estimating cloudburst risk in the Himalayan region using multi-source atmospheric reanalysis and satellite precipitation data.**
+> **A data-driven system for estimating cloudburst risk in the Himalayan region using atmospheric reanalysis and satellite precipitation data.**
 
 ---
 
-## Why This Project Matters
+## Project Overview
 
-Cloudbursts are short-lived, highly localized extreme rainfall events that frequently trigger flash floods and landslides in mountainous regions.  
-Despite advances in numerical weather prediction, **cloudbursts remain extremely difficult to forecast** due to their rapid onset, small spatial scale, and complex terrain interactions.
+Cloudbursts are short-duration, highly localized extreme rainfall events that frequently trigger flash floods and landslides in mountainous regions.  
+Due to their rapid onset, small spatial scale, and strong terrain dependence, **cloudbursts remain difficult to forecast using conventional numerical models**.
 
-Most existing approaches rely on:
-- Fixed rainfall thresholds
-- Post-event detection
-- Rainfall-only analysis
+This project focuses on **cloudburst risk estimation** by integrating:
+- Large-scale atmospheric precursors
+- High-resolution satellite rainfall observations
 
-This project instead focuses on **cloudburst risk estimation**, enabling **early warning signals** by combining atmospheric precursors with observed precipitation.
+The objective is to **identify elevated risk conditions**, not deterministic event prediction.
 
 ---
 
-## Key Contributions 
+## What Has Been Implemented So Far
 
-✔ Risk **estimation** instead of binary “event / no-event” prediction  
-✔ Fusion of **physical atmospheric precursors (ERA5)** with **satellite rainfall (GPM-IMERG)**  
-✔ **Percentile-based extreme event labeling** (region-adaptive, data-driven)  
-✔ **Strict time-based train/test split** (no temporal leakage)  
-✔ Incremental, **storage-aware data pipeline**  
-✔ End-to-end system: ingestion → features → labels → modeling → validation  
+✔ Robust data ingestion pipeline for ERA5 and GPM-IMERG  
+✔ Region-specific preprocessing for Uttarakhand (India)  
+✔ Fault-tolerant, incremental IMERG processing (storage-aware)  
+✔ Hourly rainfall aggregation from half-hourly satellite data  
+✔ Physically interpretable feature engineering  
+✔ Percentile-based extreme rainfall labeling  
+✔ Time-consistent train/test data preparation  
+
+This repository currently emphasizes **data engineering, feature construction, and labeling**, which form the foundation of the modeling stage.
 
 ---
 
@@ -34,9 +36,9 @@ This project instead focuses on **cloudburst risk estimation**, enabling **early
 - **Objective:** Estimate cloudburst risk during Indian monsoon season  
 - **Region:** Uttarakhand, India (28°–31.5°N, 77°–81°E)  
 - **Temporal Resolution:** Hourly  
-- **Output:** Cloudburst risk score (0–1)  
+- **Output:** Cloudburst risk indicator (to be modeled)
 
-The system is designed for **decision support**, not deterministic forecasting.
+The system is intended for **decision support and early risk awareness**.
 
 ---
 
@@ -44,14 +46,14 @@ The system is designed for **decision support**, not deterministic forecasting.
 
 ### ERA5 Atmospheric Reanalysis (ECMWF)
 
-ERA5 is used to capture **large-scale atmospheric precursors** associated with extreme rainfall:
+ERA5 is used to capture **large-scale atmospheric conditions preceding extreme rainfall**, including:
 
 - Near-surface temperature (t2m)
 - Wind components (u10, v10)
 - Surface pressure (sp)
 - Total column water vapor (tcwv)
 
-ERA5 provides **physically consistent pre-event signals** that are not observable from rainfall alone.
+These variables provide **physically consistent precursors** that rainfall data alone cannot represent.
 
 ---
 
@@ -62,60 +64,65 @@ IMERG Final Run data is used for **high-resolution rainfall observation**:
 - Half-hourly precipitation rate
 - Converted to rainfall amount
 - Aggregated to hourly resolution
-- Spatially averaged over study region
+- Spatially averaged over the study region
 
-IMERG enables **objective identification of extreme rainfall** events.
+IMERG enables **objective identification of statistically extreme rainfall periods**.
 
 ---
 
 ## Cloudburst Labeling Strategy
 
-Cloudbursts are labeled using **percentile-based thresholds**, avoiding fixed heuristics:
+Extreme rainfall conditions are labeled using **percentile-based thresholds**:
 
 - 1-hour rainfall ≥ 99th percentile  
 - 3-hour rainfall ≥ 99th percentile  
 - 6-hour rainfall ≥ 99th percentile  
 
-This ensures:
+This approach avoids fixed heuristics and ensures:
 - Regional adaptability  
-- Robustness across years  
+- Consistency across years  
 - Reduced labeling bias  
 
-Labels represent **extreme rainfall conditions**, not post-disaster outcomes.
+Labels represent **extreme rainfall risk**, not disaster outcomes.
 
 ---
 
 ## Feature Engineering
 
-Physically interpretable features are derived from ERA5 and IMERG:
+Physically interpretable features derived from ERA5 and IMERG include:
 
 ### Rainfall Dynamics
 - 1h, 3h, 6h accumulated rainfall
-- Peak rainfall in last 3 hours
-- Rainfall lags (t-1, t-2)
+- Peak rainfall in recent hours
+- Rainfall lag features (t-1, t-2)
 
 ### Atmospheric Conditions
-- Wind speed = √(u² + v²)
-- 3h / 6h rolling TCWV
-- Surface pressure drop over 3 hours
-- Near-surface temperature gradient
+- Wind speed (√(u² + v²))
+- Rolling TCWV (3h / 6h)
+- Surface pressure tendency
+- Near-surface temperature gradients
 
-These features capture **moisture availability, convergence, persistence, and instability**.
+These features capture **moisture availability, persistence, and atmospheric instability**.
 
 ---
 
-## System Architecture
+## Current System Architecture
 
+```
 Raw ERA5 Data ──┐
-                ├── Feature Engineering ──┐
-Raw IMERG Data ─┘                         │
-                                          ├── Cloudburst Labeling
-                                          │
-                                Train/Test Split (Time-based)
-                                          │
-                                 ML Risk Estimation Model
-                                          │
-                                Historical Event Validation
+                ├── Data Cleaning & Alignment
+Raw IMERG Data ─┘             │
+                      Feature Engineering
+                              │
+                      Cloudburst Labeling
+                              │
+                  Time-based Train / Test Split
+                              │
+                    ML Modeling (In Progress)
+                              │
+                   Historical Event Validation
+```
+
 
 ---
 
@@ -124,63 +131,21 @@ Raw IMERG Data ─┘                         │
 ### Core
 - Python 3.10+
 - NumPy, Pandas
-- Xarray (NetCDF / HDF5 processing)
+- Xarray (NetCDF / HDF5)
 
 ### Data Access
 - EarthAccess (NASA GES DISC)
 - ERA5 Reanalysis
 - GPM IMERG
 
-### Machine Learning
+### Machine Learning (Planned)
 - Scikit-learn
-- Class imbalance handling
 - Time-aware evaluation
+- Class imbalance handling
 
 ### Visualization
 - Matplotlib
-- GeoPandas 
-
----
-
-## Project Structure
-
-Cloudburst_project/
-│
-├── data/
-│   ├── raw/
-│   │   ├── era5/
-│   │   └── imerg/
-│   └── processed/
-│       ├── imerg_halfhourly_uttarakhand.csv
-│       ├── imerg_hourly_uttarakhand.csv
-│       ├── era5_features_uttarakhand.csv
-│       ├── era5_imerg_merged_2005_2015.csv
-│       └── imerg_processed_days.csv
-│
-├── src/
-│   ├── data/
-│   │   ├── era5/
-│   │   │   ├── download_era5.py
-│   │   │   └── preprocess_era5.py
-│   │   └── imerg/
-│   │       ├── download_imerg.py
-│   │       ├── preprocess_imerg.py
-│   │       ├── aggregate_imerg.py
-│   │       └── merge_era5_imerg.py
-│   │
-│   ├── labels/
-│   │   └── create_cloudburst_labels.py
-│   │
-│   ├── models/
-│   │   └── train_test_split.py
-│   │
-├── figures/
-│   ├── fig1_study_area.py
-│   ├── fig2_architecture.py
-│   ├── ...
-│
-├── README.md
-└── requirements.txt
+- GeoPandas
 
 ---
 
@@ -189,45 +154,40 @@ Cloudburst_project/
 Due to storage constraints, the pipeline supports **year-wise execution**:
 
 1. Download IMERG for selected years
-2. Preprocess → update `imerg_processed_days.csv`
-3. Aggregate → merge → label
-4. Safely delete raw files
-5. Resume anytime without duplication
+2. Preprocess and update processed-days tracker
+3. Aggregate and merge datasets
+4. Safely remove raw files
+5. Resume processing without duplication
 
 ---
 
-## Evaluation & Validation
+## Project Status
 
-- Time-aware train/test split
-- Event-wise risk escalation analysis
-- Comparison with historical cloudburst records
+🚧 **Active Development**
 
-The objective is **early risk signal**, not perfect classification accuracy.
+### Completed
+- Data ingestion and preprocessing
+- Feature engineering
+- Extreme rainfall labeling
+- Rolling-window dataset creation:
+  - 2005–2015
+  - 2006–2016
+  - 2007–2017
+
+### In Progress
+- Full multi-year dataset consolidation
+- Model training and evaluation
+- Result visualization
+- CI/CD automation
 
 ---
 
 ## Author Note
 
-This project demonstrates:
+This project is developed with an emphasis on:
+- Physical interpretability
+- Reproducible data pipelines
+- Time-consistent evaluation
+- Applied Climate + Machine Learning research
 
-- End-to-end ML system design
-- Climate + ML domain understanding
-- Production-aware data engineering
-- Research-grade methodology
-
----
-## Project Status
-
-🚧 **Active Development**
-
-- Data processing completed for rolling windows:
-  - 2005–2015
-  - 2006–2016
-  - 2007–2017
-- Remaining years are being processed incrementally due to storage constraints
-- Model training and evaluation to be added after full data consolidation
-- CI/CD integration planned
-
-This repository reflects a real-world, iterative research workflow.
-
----
+The repository will continue to evolve as modeling and validation stages are completed.
