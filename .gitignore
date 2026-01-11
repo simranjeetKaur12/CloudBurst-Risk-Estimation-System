@@ -1,0 +1,22 @@
+# Data
+data/raw/
+data/processed/*.csv
+data/processed/*.nc
+data/processed/*.h5
+data/processed/*.HDF5
+
+# Large figures
+reports/Model figures/*.png
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+.venv
+.env/
+
+# OS
+.DS_Store
+Thumbs.db
