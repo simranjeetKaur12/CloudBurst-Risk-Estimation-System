@@ -1,7 +1,7 @@
 import pandas as pd
 from pathlib import Path
 
-IN_CSV = Path("data/processed/labeled_cloudburst_2005_2015.csv")
+IN_CSV = Path("data/processed/labeled_cloudburst.csv")
 
 TRAIN_CSV = Path("data/processed/train.csv")
 TEST_CSV  = Path("data/processed/test.csv")

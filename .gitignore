@@ -8,9 +8,15 @@ data/processed/*.HDF5
 # Large figures
 reports/Model figures/*.png
 
+# Models
+models/*.pkl
+models/*.joblib
+
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
 # Environment
 .env
@@ -20,3 +26,7 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+.dodsrc
+.hintrc
+.vscode/

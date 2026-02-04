@@ -1,8 +1,8 @@
 import pandas as pd
 from pathlib import Path
 
-IN_CSV  = Path("data/processed/era5_imerg_merged_2005_2015.csv")
-OUT_CSV = Path("data/processed/era5_imerg_features_2005_2015.csv")
+IN_CSV  = Path("data/processed/era5_imerg_merged.csv")
+OUT_CSV = Path("data/processed/era5_imerg_features.csv")
 
 print("🚀 Building physical cloudburst features")
 

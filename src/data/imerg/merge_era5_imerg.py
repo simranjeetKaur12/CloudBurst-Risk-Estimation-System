@@ -3,11 +3,12 @@ from pathlib import Path
 
 ERA5_CSV  = Path("data/processed/era5_features_uttarakhand.csv")
 IMERG_CSV = Path("data/processed/imerg_hourly_uttarakhand.csv")
-OUT_CSV   = Path("data/processed/era5_imerg_merged_2007_2017.csv")
+OUT_CSV   = Path("data/processed/era5_imerg_merged.csv")
 
 MONSOON_MONTHS = [6, 7, 8, 9]
 
 print("🚀 Merging ERA5 + IMERG")
+
 
 era5 = pd.read_csv(ERA5_CSV, parse_dates=["time"])
 imerg = pd.read_csv(IMERG_CSV, parse_dates=["time"])

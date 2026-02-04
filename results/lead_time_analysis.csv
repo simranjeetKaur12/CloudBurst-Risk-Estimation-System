@@ -1,0 +1,20 @@
+event_date,location,state,severity,lead_YELLOW_hr,lead_ORANGE_hr,lead_RED_hr
+2021-02-07,Chamoli (Nanda Devi National Park),Uttarakhand,Catastrophic,,,
+2021-05-03,"Gada Parli village, Sainj",Himachal Pradesh,Low,,,
+2021-05-04,"Paliur, Kilod, Kuner panchayats",Himachal Pradesh,Low,,,
+2021-07-16,Bharain area,Himachal Pradesh,Low,48.0,,
+2021-07-27,"Tozing Nullah, Udaipur",Himachal Pradesh,Moderate,44.0,22.0,
+2021-07-28,Amarnath cave area,Jammu & Kashmir,Low,48.0,46.0,
+2021-07-28,Hunzar hamlet,Jammu & Kashmir,Severe,48.0,46.0,
+2022-07-08,Amarnath Cave Shrine,Jammu & Kashmir,Severe,27.0,,
+2022-08-19,Multiple locations,Himachal Pradesh,Severe,3.0,,
+2023-07-08,Multiple locations,Himachal Pradesh,Moderate,48.0,44.0,
+2023-07-10,Thunag Area,Himachal Pradesh,Severe,48.0,27.0,25.0
+2023-07-25,Brahmaganga HEP area,Himachal Pradesh,Low,26.0,,
+2023-08-14,Summer Hill area,Himachal Pradesh,Severe,48.0,10.0,
+2024-05-12,Gharshu village,Himachal Pradesh,Low,,,
+2024-07-27,"Miyar valley, Karpat nullah",Himachal Pradesh,Low,48.0,,
+2024-07-31,Samej Khad/Samej Village,Himachal Pradesh,Severe,48.0,,
+2024-08-01,"Thalatukhod area, Padhar",Himachal Pradesh,Moderate,30.0,,6.0
+2024-08-01,"Bagipul, Nirmand",Himachal Pradesh,Moderate,30.0,,6.0
+2024-09-26,Paonta Sahib area,Himachal Pradesh,Low,8.0,,

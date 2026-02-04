@@ -9,8 +9,8 @@ import time
 # CONFIG
 # ==============================
 
-START_YEAR = 2006
-END_YEAR   = 2014
+START_YEAR = 2005
+END_YEAR   = 2024
 MONSOON_MONTHS = [6, 7, 8, 9]
 
 IMERG_SHORT_NAME = "GPM_3IMERGHH"

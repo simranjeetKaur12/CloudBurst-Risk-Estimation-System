@@ -28,7 +28,7 @@ VARIABLES = [
     "total_column_water_vapour",
 ]
 
-START_YEAR = 2015
+START_YEAR = 2005
 END_YEAR = 2024   # ⚠ TEST WITH ONE YEAR FIRST
 
 # ==============================
