@@ -1,3 +1,4 @@
+#this is a script to evaluate the correctness of the cloudburst labels by comparing them to a historic dataset of known cloudburst events. It checks if the labeled hours match with the historic events within a ±24 hour window and calculates recall metrics.
 import pandas as pd
 from datetime import timedelta
 
