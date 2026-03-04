@@ -1,74 +1,77 @@
-import pandas as pd
+import argparse
 from pathlib import Path
 
-# --------------------------------
-# CONFIG
-# --------------------------------
-IN_CSV = Path("data/processed/era5_imerg_features.csv")
-OUT_CSV = Path("data/processed/labeled_cloudburst.csv")
+import pandas as pd
 
-print("🚀 Creating calibrated cloudburst labels")
 
-# --------------------------------
-# LOAD
-# --------------------------------
-df = pd.read_csv(IN_CSV, parse_dates=["time"])
-df = df.sort_values("time").reset_index(drop=True)
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input_csv", type=str, default="data/processed/era5_imerg_features_all_regions.csv")
+    parser.add_argument("--output_csv", type=str, default="data/processed/labeled_cloudburst_all_regions.csv")
+    return parser.parse_args()
 
-# --------------------------------
-# DATA-DRIVEN THRESHOLDS
-# --------------------------------
-p97_1h = df["rain_mm"].quantile(0.97)
-p97_3h = df["rain_3h"].quantile(0.97)
-p97_6h = df["rain_6h"].quantile(0.97)
 
-p95_peak = df["rain_peak_3h"].quantile(0.95)
-p90_sp_drop = df["sp_drop_3h"].quantile(0.10)  # negative tail
-p90_tcwv = df["tcwv_3h"].quantile(0.90)
+def label_one_region(group: pd.DataFrame) -> pd.DataFrame:
+    g = group.sort_values("time").copy()
 
-print("\n=== Thresholds ===")
-print(f"1h rain ≥ {p97_1h:.4f}")
-print(f"3h rain ≥ {p97_3h:.4f}")
-print(f"6h rain ≥ {p97_6h:.4f}")
-print(f"3h peak ≥ {p95_peak:.4f}")
-print(f"SP drop ≤ {p90_sp_drop:.2f}")
-print(f"TCWV 3h ≥ {p90_tcwv:.2f}")
+    p97_1h = g["rain_mm"].quantile(0.97)
+    p97_3h = g["rain_3h"].quantile(0.97)
+    p97_6h = g["rain_6h"].quantile(0.97)
 
-# --------------------------------
-# LABEL LOGIC
-# --------------------------------
+    p95_peak = g["rain_peak_3h"].quantile(0.95)
+    p10_sp_drop = g["sp_drop_3h"].quantile(0.10)
+    p90_tcwv = g["tcwv_3h"].quantile(0.90)
 
-# Tier 1: Extreme relative rainfall
-tier1 = (
-    (df["rain_mm"] >= p97_1h) |
-    (df["rain_3h"] >= p97_3h) |
-    (df["rain_6h"] >= p97_6h)
-)
+    tier1 = (
+        (g["rain_mm"] >= p97_1h)
+        | (g["rain_3h"] >= p97_3h)
+        | (g["rain_6h"] >= p97_6h)
+    )
 
-# Tier 2: Concentrated burst + atmospheric trigger
-tier2 = (
-    (df["rain_peak_3h"] >= p95_peak) &
-    (df["sp_drop_3h"] <= p90_sp_drop) &
-    (df["tcwv_3h"] >= p90_tcwv)
-)
+    tier2 = (
+        (g["rain_peak_3h"] >= p95_peak)
+        & (g["sp_drop_3h"] <= p10_sp_drop)
+        & (g["tcwv_3h"] >= p90_tcwv)
+    )
 
-df["cloudburst"] = (tier1 | tier2).astype(int)
+    g["cloudburst"] = (tier1 | tier2).astype(int)
+    g["label_rule_tier1"] = tier1.astype(int)
+    g["label_rule_tier2"] = tier2.astype(int)
+    return g
 
-# --------------------------------
-# SUMMARY
-# --------------------------------
-total = len(df)
-events = df["cloudburst"].sum()
 
-print("\n=== LABEL SUMMARY ===")
-print(f"Total hours       : {total}")
-print(f"Cloudburst hours : {events}")
-print(f"Event ratio      : {events / total:.4f}")
-print("Tier-1 count     :", tier1.sum())
-print("Tier-2 count     :", tier2.sum())
+def main():
+    args = parse_args()
+    in_csv = Path(args.input_csv)
+    if not in_csv.exists():
+        legacy = Path("data/processed/era5_imerg_features.csv")
+        if legacy.exists():
+            in_csv = legacy
+    out_csv = Path(args.output_csv)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
 
-# --------------------------------
-# SAVE
-# --------------------------------
-df.to_csv(OUT_CSV, index=False)
-print("\n✅ Saved:", OUT_CSV)
+    df = pd.read_csv(in_csv, parse_dates=["time"]).sort_values(["region", "time"]).reset_index(drop=True)
+    if "region" not in df.columns:
+        df["region"] = "unknown"
+
+    if "district_id" in df.columns:
+        group_col = "district_id"
+    elif "district_name" in df.columns:
+        group_col = "district_name"
+    else:
+        group_col = "region"
+
+    labeled_parts = [label_one_region(group) for _, group in df.groupby(group_col, sort=False)]
+    labeled = pd.concat(labeled_parts, ignore_index=True)
+    labeled.to_csv(out_csv, index=False)
+
+    summary = labeled.groupby(group_col)["cloudburst"].agg(["count", "sum", "mean"]).rename(
+        columns={"count": "rows", "sum": "cloudburst_hours", "mean": "event_ratio"}
+    )
+    print("Cloudburst labels created")
+    print(summary)
+    print("Saved ->", out_csv)
+
+
+if __name__ == "__main__":
+    main()

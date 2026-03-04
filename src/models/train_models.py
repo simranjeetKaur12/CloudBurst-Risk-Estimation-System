@@ -1,35 +1,15 @@
-# src/models/train_models_early_warning.py
-
-import pandas as pd
-import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    recall_score, precision_score, f1_score, roc_auc_score
-)
-from xgboost import XGBClassifier
-import joblib
+import argparse
 from pathlib import Path
 
-# -----------------------------
-# Paths
-# -----------------------------
-DATA_DIR = Path("data/processed")
-MODEL_DIR = Path("models")
-MODEL_DIR.mkdir(exist_ok=True)
+import joblib
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
 
-TRAIN_FILE = DATA_DIR / "train.csv"
-TEST_FILE  = DATA_DIR / "test.csv"
-
-# -----------------------------
-# Load data
-# -----------------------------
-train_df = pd.read_csv(TRAIN_FILE)
-test_df  = pd.read_csv(TEST_FILE)
-
-# -----------------------------
-# Leakage-free feature set
-# -----------------------------
 FEATURES = [
     "t2m",
     "u10",
@@ -42,110 +22,103 @@ FEATURES = [
     "sp_drop_3h",
     "t2m_grad",
 ]
-
 TARGET = "cloudburst"
 
-X_train = train_df[FEATURES]
-y_train = train_df[TARGET]
 
-X_test = test_df[FEATURES]
-y_test = test_df[TARGET]
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train_csv", type=str, default="data/processed/train.csv")
+    parser.add_argument("--test_csv", type=str, default="data/processed/test.csv")
+    parser.add_argument("--model_dir", type=str, default="models")
+    parser.add_argument("--results_csv", type=str, default="results/model_performance.csv")
+    parser.add_argument("--threshold", type=float, default=0.5)
+    return parser.parse_args()
 
-print("Train samples:", X_train.shape)
-print("Test samples :", X_test.shape)
-print("Positive ratio (train):", y_train.mean())
 
-# -----------------------------
-# Helper function
-# -----------------------------
-def evaluate(model, X_test, y_test, name):
-    y_prob = model.predict_proba(X_test)[:, 1]
-    y_pred = (y_prob >= 0.5).astype(int)
+def evaluate(model, x_test, y_test, name: str, threshold: float) -> dict:
+    y_prob = model.predict_proba(x_test)[:, 1]
+    y_pred = (y_prob >= threshold).astype(int)
 
-    recall = recall_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred)
-    f1 = f1_score(y_test, y_pred)
-    roc = roc_auc_score(y_test, y_prob)
-
-    result = {
+    return {
         "model": name,
-        "auc": roc,
-        "f1": f1,
-        "recall": recall,
-        "precision": precision
+        "auc": float(roc_auc_score(y_test, y_prob)),
+        "f1": float(f1_score(y_test, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_test, y_pred, zero_division=0)),
+        "precision": float(precision_score(y_test, y_pred, zero_division=0)),
     }
 
-    results_path = Path("results/model_performance.csv")
+
+def main():
+    args = parse_args()
+    model_dir = Path(args.model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    train_df = pd.read_csv(args.train_csv)
+    test_df = pd.read_csv(args.test_csv)
+
+    x_train = train_df[FEATURES]
+    y_train = train_df[TARGET]
+    x_test = test_df[FEATURES]
+    y_test = test_df[TARGET]
+
+    print("Train samples:", x_train.shape)
+    print("Test samples :", x_test.shape)
+    print("Positive ratio (train):", float(y_train.mean()))
+
+    results = []
+
+    rf = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=12,
+        min_samples_leaf=50,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+    )
+    rf.fit(x_train, y_train)
+    joblib.dump(rf, model_dir / "rf_early_warning.pkl")
+    results.append(evaluate(rf, x_test, y_test, "Random Forest (Early Warning)", args.threshold))
+
+    pos = max((y_train == 1).sum(), 1)
+    neg = (y_train == 0).sum()
+    scale_pos_weight = max(neg / pos, 1.0)
+    xgb = XGBClassifier(
+        n_estimators=400,
+        max_depth=6,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        scale_pos_weight=scale_pos_weight,
+        eval_metric="logloss",
+        random_state=42,
+        n_jobs=-1,
+    )
+    xgb.fit(x_train, y_train)
+    joblib.dump(xgb, model_dir / "xgb_early_warning.pkl")
+    results.append(evaluate(xgb, x_test, y_test, "XGBoost (Early Warning)", args.threshold))
+
+    # Scaling improves LR convergence on mixed-scale meteorological features.
+    lr = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(max_iter=2000, class_weight="balanced", solver="lbfgs"),
+    )
+    lr.fit(x_train, y_train)
+    joblib.dump(lr, model_dir / "lr_early_warning.pkl")
+    results.append(evaluate(lr, x_test, y_test, "Logistic Regression (Early Warning)", args.threshold))
+
+    results_df = pd.DataFrame(results)
+    results_path = Path(args.results_csv)
     results_path.parent.mkdir(parents=True, exist_ok=True)
-
     if results_path.exists():
-        df = pd.read_csv(results_path)
-        df = pd.concat([df, pd.DataFrame([result])], ignore_index=True)
-    else:
-        df = pd.DataFrame([result])
+        old = pd.read_csv(results_path)
+        results_df = pd.concat([old, results_df], ignore_index=True)
+    results_df.to_csv(results_path, index=False)
 
-    df.to_csv(results_path, index=False)
+    joblib.dump(FEATURES, model_dir / "feature_list.pkl")
 
-    print(f"\n{name}")
-    print("Recall   :", recall)
-    print("Precision:", precision)
-    print("F1       :", f1)
-    print("ROC AUC  :", roc)
-
-# -----------------------------
-# Random Forest (imbalance-aware)
-# -----------------------------
-rf = RandomForestClassifier(
-    n_estimators=300,
-    max_depth=12,
-    min_samples_leaf=50,
-    class_weight="balanced",
-    random_state=42,
-    n_jobs=-1
-)
-
-rf.fit(X_train, y_train)
-evaluate(rf, X_test, y_test, "Random Forest (Early Warning)")
-
-joblib.dump(rf, MODEL_DIR / "rf_early_warning.pkl")
-
-# -----------------------------
-# XGBoost (best for tabular extremes)
-# -----------------------------
-scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
-
-xgb = XGBClassifier(
-    n_estimators=400,
-    max_depth=6,
-    learning_rate=0.05,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    scale_pos_weight=scale_pos_weight,
-    eval_metric="logloss",
-    random_state=42,
-    n_jobs=-1
-)
-
-xgb.fit(X_train, y_train)
-evaluate(xgb, X_test, y_test, "XGBoost (Early Warning)")
-
-joblib.dump(xgb, MODEL_DIR / "xgb_early_warning.pkl")
-
-# -----------------------------
-# Logistic Regression (baseline)
-# -----------------------------
-lr = LogisticRegression(
-    max_iter=500,
-    class_weight="balanced",
-    n_jobs=-1
-)
-
-lr.fit(X_train, y_train)
-evaluate(lr, X_test, y_test, "Logistic Regression (Early Warning)")
-
-joblib.dump(lr, MODEL_DIR / "lr_early_warning.pkl")
-
-joblib.dump(X_train.columns.tolist(), "models/feature_list.pkl")
+    print("Models trained and saved successfully.")
+    print(results_df.tail(3).to_string(index=False))
 
 
-print("\n✅ Early-warning models trained & saved")
+if __name__ == "__main__":
+    main()

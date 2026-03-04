@@ -30,3 +30,12 @@ Thumbs.db
 .dodsrc
 .hintrc
 .vscode/
+
+data/
+models/
+results/
+cloudburst_mobile/**/generated_*
+
+*.csv
+*.pdf
+results/*.csv

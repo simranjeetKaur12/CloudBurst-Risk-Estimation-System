@@ -1,50 +1,64 @@
+import argparse
+import logging
+import re
 import zipfile
 from pathlib import Path
-import re
 
-# ==========================
-# PATHS
-# ==========================
-ZIP_FOLDER = Path("data/raw/era5")
-ACCUM_FOLDER = ZIP_FOLDER / "accum"
-INSTANT_FOLDER = ZIP_FOLDER / "instant"
 
-ACCUM_FOLDER.mkdir(exist_ok=True)
-INSTANT_FOLDER.mkdir(exist_ok=True)
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--region", type=str, default="himalayan_west")
+    parser.add_argument("--input_dir", type=str, default="data/raw/era5")
+    return parser.parse_args()
 
-# ==========================
-# PROCESS FILES
-# ==========================
-for zip_path in ZIP_FOLDER.glob("era5_*.nc"):
 
-    if not zipfile.is_zipfile(zip_path):
-        print(f"❌ Not a zip: {zip_path.name}")
-        continue
+def extract_files(base_dir: Path):
+    accum_folder = base_dir / "accum"
+    instant_folder = base_dir / "instant"
+    accum_folder.mkdir(exist_ok=True)
+    instant_folder.mkdir(exist_ok=True)
 
-    # Extract year and month from filename
-    match = re.search(r"era5_(\d{4})_(\d{2})", zip_path.name)
-    if not match:
-        print(f"⚠️ Skipping (cannot parse date): {zip_path.name}")
-        continue
+    for file_path in base_dir.glob("era5_*"):
+        if file_path.suffix == ".nc":
+            logging.info("Already extracted: %s", file_path.name)
+            continue
 
-    year, month = match.groups()
+        if not zipfile.is_zipfile(file_path):
+            logging.warning("Skipping non-zip: %s", file_path.name)
+            continue
 
-    print(f"📦 Processing {zip_path.name}")
+        match = re.search(r"era5_[a-z_]+_(\d{4})_(\d{2})", file_path.name)
+        if not match:
+            match = re.search(r"era5_(\d{4})_(\d{2})", file_path.name)
+        if not match:
+            continue
 
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        for member in zf.namelist():
+        year, month = match.groups()
 
-            if "accum" in member.lower():
-                out_path = ACCUM_FOLDER / f"era5_accum_{year}_{month}.nc"
-            elif "instant" in member.lower():
-                out_path = INSTANT_FOLDER / f"era5_instant_{year}_{month}.nc"
-            else:
-                print(f"⚠️ Unknown file inside zip: {member}")
-                continue
+        with zipfile.ZipFile(file_path, "r") as archive:
+            for member in archive.namelist():
+                if "accum" in member.lower():
+                    out_path = accum_folder / f"era5_accum_{year}_{month}.nc"
+                elif "instant" in member.lower():
+                    out_path = instant_folder / f"era5_instant_{year}_{month}.nc"
+                else:
+                    continue
 
-            with zf.open(member) as src, open(out_path, "wb") as dst:
-                dst.write(src.read())
+                if out_path.exists():
+                    continue
 
-            print(f"   ✅ Saved → {out_path.name}")
+                with archive.open(member) as src, open(out_path, "wb") as dst:
+                    dst.write(src.read())
+                logging.info("Saved -> %s", out_path.name)
 
-print("\n🎉 All files extracted and organized!")
+    logging.info("ERA5 extraction complete")
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    args = parse_args()
+    region_dir = Path(args.input_dir) / args.region
+    if not region_dir.exists():
+        # Backward compatibility: data/raw/era5 directly contains files.
+        region_dir = Path(args.input_dir)
+    extract_files(region_dir)

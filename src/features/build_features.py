@@ -1,67 +1,67 @@
-import pandas as pd
+import argparse
 from pathlib import Path
 
-IN_CSV  = Path("data/processed/era5_imerg_merged.csv")
-OUT_CSV = Path("data/processed/era5_imerg_features.csv")
+import pandas as pd
 
-print("🚀 Building physical cloudburst features")
 
-df = pd.read_csv(IN_CSV, parse_dates=["time"])
-df = df.sort_values("time").reset_index(drop=True)
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input_csv", type=str, default="data/processed/era5_imerg_merged_all_regions.csv")
+    parser.add_argument("--output_csv", type=str, default="data/processed/era5_imerg_features_all_regions.csv")
+    return parser.parse_args()
 
-# =====================================================
-# RAINFALL FEATURES (IMERG)
-# =====================================================
 
-# 1-hour rainfall (already there as rain_mm)
-# df["rain_mm"]
+def add_features(group: pd.DataFrame) -> pd.DataFrame:
+    g = group.sort_values("time").copy()
 
-# 3-hour rolling rainfall
-df["rain_3h"] = df["rain_mm"].rolling(window=3).sum()
+    g["rain_3h"] = g["rain_mm"].rolling(window=3).sum()
+    g["rain_6h"] = g["rain_mm"].rolling(window=6).sum()
+    g["rain_peak_3h"] = g["rain_mm"].rolling(window=3).max()
+    g["rain_lag1"] = g["rain_mm"].shift(1)
+    g["rain_lag2"] = g["rain_mm"].shift(2)
 
-# 6-hour accumulated rainfall
-df["rain_6h"] = df["rain_mm"].rolling(window=6).sum()
+    g["wind_speed"] = (g["u10"] ** 2 + g["v10"] ** 2) ** 0.5
 
-# Peak intensity in last 3 hours
-df["rain_peak_3h"] = df["rain_mm"].rolling(window=3).max()
+    g["tcwv_3h"] = g["tcwv"].rolling(window=3).mean()
+    g["tcwv_6h"] = g["tcwv"].rolling(window=6).mean()
 
-# Rainfall lags
-df["rain_lag1"] = df["rain_mm"].shift(1)
-df["rain_lag2"] = df["rain_mm"].shift(2)
+    g["sp_drop_3h"] = g["sp"] - g["sp"].shift(3)
+    g["t2m_grad"] = g["t2m"] - g["t2m"].shift(1)
+    g["temp_c"] = g["t2m"] - 273.15
+    g["pressure_hpa"] = g["sp"] / 100.0
 
-# =====================================================
-# WIND FEATURES (ERA5)
-# =====================================================
+    return g
 
-df["wind_speed"] = (df["u10"]**2 + df["v10"]**2) ** 0.5
 
-# =====================================================
-# MOISTURE FEATURES
-# =====================================================
+def main():
+    args = parse_args()
+    in_csv = Path(args.input_csv)
+    if not in_csv.exists():
+        legacy = Path("data/processed/era5_imerg_merged.csv")
+        if legacy.exists():
+            in_csv = legacy
+    out_csv = Path(args.output_csv)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
 
-df["tcwv_3h"] = df["tcwv"].rolling(window=3).mean()
-df["tcwv_6h"] = df["tcwv"].rolling(window=6).mean()
+    df = pd.read_csv(in_csv, parse_dates=["time"]).sort_values(["region", "time"]).reset_index(drop=True)
+    if "region" not in df.columns:
+        df["region"] = "unknown"
+    if "district_id" in df.columns:
+        group_col = "district_id"
+    elif "district_name" in df.columns:
+        group_col = "district_name"
+    else:
+        group_col = "region"
 
-# =====================================================
-# DYNAMIC / THERMODYNAMIC FEATURES
-# =====================================================
+    featured_parts = [add_features(group) for _, group in df.groupby(group_col, sort=False)]
+    featured = pd.concat(featured_parts, ignore_index=True)
+    featured = featured.dropna().reset_index(drop=True)
+    featured.to_csv(out_csv, index=False)
 
-# Pressure drop over 3 hours (negative = falling pressure)
-df["sp_drop_3h"] = df["sp"] - df["sp"].shift(3)
+    print("Feature engineering complete")
+    print("Rows:", len(featured))
+    print("Saved ->", out_csv)
 
-# Temperature gradient
-df["t2m_grad"] = df["t2m"] - df["t2m"].shift(1)
 
-# =====================================================
-# CLEANUP
-# =====================================================
-
-# Drop rows with NaNs created by rolling/shift
-df = df.dropna().reset_index(drop=True)
-
-OUT_CSV.parent.mkdir(parents=True, exist_ok=True)
-df.to_csv(OUT_CSV, index=False)
-
-print("✅ Feature engineering complete")
-print("Rows:", len(df))
-print("Saved →", OUT_CSV)
+if __name__ == "__main__":
+    main()

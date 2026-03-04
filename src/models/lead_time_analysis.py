@@ -1,92 +1,85 @@
-import pandas as pd
+import argparse
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 
-# ==============================
-# CONFIG
-# ==============================
-RISK_CSV = "results/risk_tier_predictions.csv"
-HISTORIC_CSV = "data/historic_events.csv"
-WINDOW_HOURS = 48   # max look-back window
+WINDOW_HOURS = 48
 
-# ==============================
-# LOAD DATA
-# ==============================
-risk = pd.read_csv(
-    RISK_CSV,
-    parse_dates=["time"],
-    index_col="time"
-)
 
-historic = pd.read_csv(
-    HISTORIC_CSV,
-    parse_dates=["Date"],
-    dayfirst=True
-)
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--risk_csv", type=str, default="results/risk_tier_predictions.csv")
+    parser.add_argument("--historic_csv", type=str, default="data/historic_events.csv")
+    parser.add_argument("--output_csv", type=str, default="results/lead_time_analysis.csv")
+    parser.add_argument("--window_hours", type=int, default=WINDOW_HOURS)
+    parser.add_argument("--group_col", type=str, default="region")
+    parser.add_argument("--group_value", type=str, default=None)
+    return parser.parse_args()
 
-# Keep only events within model time span
-historic = historic[
-    historic["Date"].between(risk.index.min(), risk.index.max())
-].copy()
 
-print(f"Valid historic events: {len(historic)}")
+def first_alert_hours(window: pd.DataFrame, event_time: pd.Timestamp, tier: str) -> float:
+    hits = window[window["risk_tier"] == tier]
+    if len(hits) == 0:
+        return float("nan")
+    first_hit = pd.to_datetime(hits["time"]).min()
+    return (event_time - first_hit).total_seconds() / 3600.0
 
-# ==============================
-# LEAD TIME COMPUTATION
-# ==============================
-records = []
 
-for _, event in historic.iterrows():
-    event_time = event["Date"]
+def main():
+    args = parse_args()
 
-    window_start = event_time - pd.Timedelta(hours=WINDOW_HOURS)
+    risk = pd.read_csv(args.risk_csv, parse_dates=["time"])
+    historic = pd.read_csv(args.historic_csv, parse_dates=["Date"], dayfirst=True)
 
-    window = risk.loc[
-        (risk.index >= window_start) &
-        (risk.index <= event_time)
-    ]
+    if args.group_col in risk.columns:
+        if args.group_value is None:
+            unique_groups = risk[args.group_col].dropna().astype(str).unique().tolist()
+            if len(unique_groups) > 1:
+                print(
+                    "Multiple groups detected in risk data. "
+                    "Use --group_value to validate a specific region/district."
+                )
+                print("Available groups:", unique_groups)
+                return
+        else:
+            risk = risk[risk[args.group_col].astype(str).str.lower() == args.group_value.lower()].copy()
 
-    def first_alert(tier):
-        hits = window[window["risk_tier"] == tier]
-        if len(hits) == 0:
-            return np.nan
-        return (event_time - hits.index.min()).total_seconds() / 3600
+    if risk.empty:
+        raise RuntimeError("No risk rows available for lead-time analysis.")
 
-    records.append({
-        "event_date": event_time,
-        "location": event["Location"],
-        "state": event["State"],
-        "severity": event["Severity"],
-        "lead_YELLOW_hr": first_alert("YELLOW"),
-        "lead_ORANGE_hr": first_alert("ORANGE"),
-        "lead_RED_hr": first_alert("RED"),
-    })
+    historic = historic[historic["Date"].between(risk["time"].min(), risk["time"].max())].copy()
+    print(f"Valid historic events: {len(historic)}")
 
-lead_df = pd.DataFrame(records)
+    records = []
+    risk = risk.sort_values("time")
 
-# ==============================
-# SAVE RESULTS
-# ==============================
-lead_df.to_csv("results/lead_time_analysis.csv", index=False)
+    for _, event in historic.iterrows():
+        event_time = event["Date"]
+        window_start = event_time - pd.Timedelta(hours=args.window_hours)
+        window = risk[(risk["time"] >= window_start) & (risk["time"] <= event_time)]
 
-print("\n=== LEAD TIME SUMMARY (hours) ===")
-print(lead_df[[
-    "lead_YELLOW_hr",
-    "lead_ORANGE_hr",
-    "lead_RED_hr"
-]].describe().round(2))
+        records.append(
+            {
+                "event_date": event_time,
+                "location": event.get("Location", ""),
+                "state": event.get("State", ""),
+                "severity": event.get("Severity", ""),
+                "lead_YELLOW_hr": first_alert_hours(window, event_time, "YELLOW"),
+                "lead_ORANGE_hr": first_alert_hours(window, event_time, "ORANGE"),
+                "lead_RED_hr": first_alert_hours(window, event_time, "RED"),
+            }
+        )
 
-# ==============================
-# DETECTION RATES
-# ==============================
-print("\n=== Detection Rate ===")
-for tier in ["YELLOW", "ORANGE", "RED"]:
-    detected = lead_df[f"lead_{tier}_hr"].notna().mean()
-    print(f"{tier:7s}: {detected*100:.1f}%")
+    lead_df = pd.DataFrame(records)
+    out_csv = Path(args.output_csv)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    lead_df.to_csv(out_csv, index=False)
 
-# ==============================
-# EARLIEST WARNINGS
-# ==============================
-print("\n=== Median Lead Times (hours) ===")
-for tier in ["YELLOW", "ORANGE", "RED"]:
-    median = lead_df[f"lead_{tier}_hr"].median()
-    print(f"{tier:7s}: {median:.2f}")
+    print("Lead-time analysis saved ->", out_csv)
+    if not lead_df.empty:
+        print(lead_df[["lead_YELLOW_hr", "lead_ORANGE_hr", "lead_RED_hr"]].describe().round(2))
+
+
+if __name__ == "__main__":
+    main()
