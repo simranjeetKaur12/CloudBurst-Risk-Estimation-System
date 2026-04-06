@@ -18,12 +18,10 @@ HCIS is designed as an operational decision-support system, not a generic weathe
 - Feature engineering + cloudburst labeling + model training workflow
 - Chunk-specific model loading at inference time
 - District search endpoint and district prediction endpoint
-- District-to-zone geospatial boundary intelligence endpoint
-- Pipeline execution endpoint for latest 10-day operational context
+- Primary strict prediction contract: `GET /predict?district=<name>`
+- User profile persistence: save/retrieve preferred district by `user_id`
 - Visualization payload for rain/moisture/pressure/wind trends
-- Historical events API with replay timeline support
-- Optional token-based authentication for deeper analytics
-- Flutter mobile app with district selection and risk dashboard UX
+- Flutter mobile app with district selection, caching, and risk dashboard UX
 
 ## Repository Structure
 
@@ -90,7 +88,25 @@ Interpretation:
 - `GET /districts?q=<optional>&limit=<optional>`
 - Returns searchable district list with `district`, `state`, `chunk`
 
-### District Prediction
+### District Prediction (Primary Contract)
+
+- `GET /predict?district=<district_name>&user_id=<optional>`
+- If `district` is omitted and `user_id` is provided, backend uses saved preferred district.
+
+Example:
+
+```http
+GET /predict?district=Dehradun&user_id=demo-user-001
+```
+
+Response includes:
+- `district`, `zone`, `risk_tier`, `probability`, `confidence`
+- `timeline`, `precursors`, `insights`
+- `risk_score`, `alert_tier`, `lead_time_analysis`
+- `model_breakdown`, `top_contributing_factors`, `visualization`
+- `layman_explanation`
+
+### District Prediction (Backward-Compatible)
 
 - `POST /predict-district`
 
@@ -102,29 +118,27 @@ Request:
 }
 ```
 
-Response includes:
-- `risk_score`, `alert_tier`, `lead_time_analysis`
-- `model_breakdown` (rf/xgb/ensemble probabilities)
-- `top_contributing_factors`
-- `visualization` trend arrays
-- `layman_explanation`
-
 ### Backward-Compatible Location Prediction
 
 - `POST /predict-location` with `lat/lon` or `latitude/longitude`
 - Internally resolves nearest/containing district and reuses district inference
 
-### Production API Surface (Web + Mobile)
+### User Profile Endpoints
 
-- `POST /inference/district` district-first inference with explainability payload
-- `POST /pipeline/run` run/resolve latest 10-day processed context
-- `GET /districts/{district_name}/zone` district boundary + zone metadata
-- `GET /zones` available zone-level district counts
-- `GET /model-insights?detailed=<bool>` model metrics and event detection summaries
-- `GET /historical-events` searchable historical cloudburst catalog
-- `GET /historical-events/replay?event_id=<id>` replay atmospheric progression
-- `GET /metrics` runtime request/cache counters
-- `POST /auth/token` optional bearer token for restricted advanced analytics
+- `GET /user-profile?user_id=<id>`
+  - Returns saved preferred district for the user (if exists)
+- `POST /user-profile/select-district`
+
+Request:
+
+```json
+{
+  "user_id": "demo-user-001",
+  "district": "Dehradun"
+}
+```
+
+This stores the district selection in SQLite (`data/app_users.db`) and enables auto-selection for subsequent sessions.
 
 ## Quick Start
 
@@ -145,6 +159,8 @@ uvicorn backend.app:app --host 0.0.0.0 --port 8000
 Local checks:
 - `http://127.0.0.1:8000/health`
 - `http://127.0.0.1:8000/docs`
+- `http://127.0.0.1:8000/districts?q=dehra`
+- `http://127.0.0.1:8000/predict?district=Dehradun`
 
 ### 3) Run Web Frontend (Streamlit)
 
@@ -152,13 +168,7 @@ Local checks:
 streamlit run frontend/app.py
 ```
 
-Then open the app and navigate to:
-
-- Home (immersive live map intro)
-- Risk Dashboard (district-first inference + explainability)
-- Novelty and Research
-- Model Insights
-- Historical Events (replay mode)
+Then open the app and use district-first risk estimation flows.
 
 ## Flutter Mobile App
 
@@ -184,6 +194,11 @@ cloudburst_mobile/build/app/outputs/flutter-apk/app-release.apk
 ```
 
 For physical devices, set backend URL in app to your laptop LAN IP (example: `http://192.168.1.25:8000`), not `10.0.2.2`.
+
+Default mobile URL behavior:
+- Android emulator: `http://10.0.2.2:8000`
+- Other platforms: `http://127.0.0.1:8000`
+- Can be overridden with `CLOUDBURST_API_BASE_URL`
 
 ## End-to-End Training Pipeline
 
@@ -217,26 +232,8 @@ python run_pipeline.py --start_year 2018 --end_year 2020 --regions himalayan_wes
   - `data/processed/labeled_cloudburst_district_central.csv`
   - `data/processed/labeled_cloudburst_district_eastern.csv`
 
-## Known Limitations
-
-- `POST /predict-district` currently uses cached processed chunk data for inference context.
-- Live "fetch last 10 days ERA5+IMERG on every request" is not yet executed in the API path (placeholder exists in backend).
-- Some shapefiles may not contain explicit district/state attributes; fallback labeling can occur.
-- Region-wise metrics may be optimistic when trained on replicated placeholder datasets.
-
 ## Research and Governance Notes
 
 - Outputs are probabilistic risk intelligence, not deterministic event confirmation.
 - Not an official government warning system.
 - Always follow IMD/NDMA/local authority advisories for public safety action.
-
-## Roadmap
-
-- True on-request 10-day data assimilation in backend inference path
-- Stronger district-level validation by chunk with non-replicated training corpora
-- PDF report generation endpoint for analytics export
-- Production deployment hardening (auth, rate-limits, monitoring)
-
-## License
-
-MIT (see `LICENSE`).
