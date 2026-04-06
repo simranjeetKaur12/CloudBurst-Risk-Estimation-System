@@ -28,19 +28,52 @@ HCIS is designed as an operational decision-support system, not a generic weathe
 ```text
 backend/                  FastAPI inference service
 cloudburst_mobile/        Flutter mobile app
+.github/workflows/        Scheduled offline batch automation
 src/                      Data, feature, labeling, model, visualization pipelines
+src/pipelines/offline/    Daily offline pipeline scripts (download->latest features)
 models/                   Trained model artifacts (.pkl)
 data/                     Raw/processed data + shapefiles
 results/                  Evaluation outputs and summaries
 run_pipeline.py           End-to-end model pipeline orchestrator
 ```
 
-## System Architecture
+## Production Architecture (Offline vs Online)
 
 ```text
-ERA5 + IMERG -> preprocessing -> merged dataset -> feature engineering
--> cloudburst labeling -> train/test split -> model training/evaluation
--> chunk models (.pkl) -> FastAPI inference -> Flutter app
+OFFLINE (GitHub Actions daily)
+ERA5 + IMERG (last 10 days) -> preprocess -> merge -> feature engineering
+-> compact latest feature tables (per chunk) -> commit/upload artifacts
+
+ONLINE (Render FastAPI)
+Client request -> district->chunk routing -> load cached model + cached latest features
+-> inference + explainability payload -> response (<1s target)
+```
+
+## Data Flow Diagram
+
+```text
+             +----------------------------+
+             | GitHub Actions (daily)     |
+             | .github/workflows/pipeline |
+             +-------------+--------------+
+                           |
+                           v
+   +----------------------+------------------------+
+   | Offline Pipeline (src/pipelines/offline)     |
+   | download/preprocess/merge/feature scripts    |
+   +----------------------+------------------------+
+                           |
+                           v
+      data/processed/latest_features_{chunk}.csv
+                           |
+                           v
+                  +--------+--------+
+                  | Render FastAPI  |
+                  | backend/app.py  |
+                  +--------+--------+
+                           |
+                           v
+                  Flutter + Streamlit clients
 ```
 
 ## Regions and Chunks
@@ -118,11 +151,6 @@ Request:
 }
 ```
 
-### Backward-Compatible Location Prediction
-
-- `POST /predict-location` with `lat/lon` or `latitude/longitude`
-- Internally resolves nearest/containing district and reuses district inference
-
 ### User Profile Endpoints
 
 - `GET /user-profile?user_id=<id>`
@@ -150,7 +178,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2) Run Backend
+### 2) Run Backend (Online Inference Only)
 
 ```bash
 uvicorn backend.app:app --host 0.0.0.0 --port 8000
@@ -161,6 +189,8 @@ Local checks:
 - `http://127.0.0.1:8000/docs`
 - `http://127.0.0.1:8000/districts?q=dehra`
 - `http://127.0.0.1:8000/predict?district=Dehradun`
+
+The backend never runs raw data download, full preprocessing, or training during request handling.
 
 ### 3) Run Web Frontend (Streamlit)
 
@@ -193,12 +223,44 @@ APK path:
 cloudburst_mobile/build/app/outputs/flutter-apk/app-release.apk
 ```
 
-For physical devices, set backend URL in app to your laptop LAN IP (example: `http://192.168.1.25:8000`), not `10.0.2.2`.
+For local physical-device testing, pass your LAN API URL via `--dart-define`.
 
 Default mobile URL behavior:
-- Android emulator: `http://10.0.2.2:8000`
-- Other platforms: `http://127.0.0.1:8000`
+- Android/web/desktop default: `https://hcis-api.onrender.com`
 - Can be overridden with `CLOUDBURST_API_BASE_URL`
+
+Example override for local backend:
+
+```bash
+flutter run --dart-define=CLOUDBURST_API_BASE_URL=http://192.168.1.25:8000
+```
+
+## Daily Offline Pipeline (GitHub Actions)
+
+Workflow file: `.github/workflows/pipeline.yml`
+
+Schedule:
+- Runs daily via cron
+- Can be triggered manually via `workflow_dispatch`
+
+Pipeline scripts:
+- `src/pipelines/offline/download_era5.py`
+- `src/pipelines/offline/download_imerg.py`
+- `src/pipelines/offline/preprocess_era5.py`
+- `src/pipelines/offline/preprocess_imerg.py`
+- `src/pipelines/offline/merge_era5_imerg.py`
+- `src/pipelines/offline/generate_latest_features.py`
+- `src/pipelines/offline/run_daily_pipeline.py`
+
+Outputs:
+- `data/processed/latest_features_western.csv`
+- `data/processed/latest_features_central.csv`
+- `data/processed/latest_features_eastern.csv`
+
+Workflow behavior:
+- Uploads latest features as build artifacts
+- Optionally commits refreshed latest feature CSVs back to the repo
+- Keeps model `.pkl` artifacts static (no daily retraining)
 
 ## End-to-End Training Pipeline
 
@@ -227,10 +289,15 @@ python run_pipeline.py --start_year 2018 --end_year 2020 --regions himalayan_wes
   - `models/western_model.pkl`
   - `models/central_model.pkl`
   - `models/eastern_model.pkl`
-- Chunk timeseries CSVs used by inference:
-  - `data/processed/labeled_cloudburst_district_western.csv`
-  - `data/processed/labeled_cloudburst_district_central.csv`
-  - `data/processed/labeled_cloudburst_district_eastern.csv`
+- Precomputed lightweight latest feature CSVs used by online inference:
+  - `data/processed/latest_features_western.csv`
+  - `data/processed/latest_features_central.csv`
+  - `data/processed/latest_features_eastern.csv`
+
+Optional offline source files (for daily feature refresh):
+- `data/processed/labeled_cloudburst_district_western.csv`
+- `data/processed/labeled_cloudburst_district_central.csv`
+- `data/processed/labeled_cloudburst_district_eastern.csv`
 
 ## Research and Governance Notes
 

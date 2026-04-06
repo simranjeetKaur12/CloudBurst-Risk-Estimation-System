@@ -7,7 +7,11 @@ import pandas as pd
 import requests
 
 
-API_BASE_URL = os.getenv("CLOUDBURST_API_BASE", "http://127.0.0.1:8000").rstrip("/")
+API_BASE_URL = (
+    os.getenv("CLOUDBURST_API_BASE_URL")
+    or os.getenv("CLOUDBURST_API_BASE")
+    or "https://hcis-api.onrender.com"
+).rstrip("/")
 TIMEOUT_SECONDS = int(os.getenv("CLOUDBURST_API_TIMEOUT", "30"))
 
 

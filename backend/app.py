@@ -1,25 +1,15 @@
 from __future__ import annotations
 
-import os
 import sqlite3
+import json
+from functools import lru_cache
 from pathlib import Path
 
-import geopandas as gpd
 import joblib
-import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from shapely.geometry import Point
-
-try:
-    from src.common.himalaya_chunks import assign_chunk
-except ModuleNotFoundError:
-    import sys
-
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from src.common.himalaya_chunks import assign_chunk
 
 app = FastAPI(title="Cloudburst Risk Prediction API")
 app.add_middleware(
@@ -31,9 +21,9 @@ app.add_middleware(
 )
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-SHAPEFILE_CANDIDATES = [
-    BASE_DIR / "data" / "shapefiles" / "india_districts.shp",
-    BASE_DIR / "data" / "shapefiles" / "geoBoundaries-IND-ADM2.shp",
+DISTRICT_LOOKUP_CANDIDATES = [
+    BASE_DIR / "data" / "processed" / "himalaya_district_lookup.csv",
+    BASE_DIR / "data" / "processed" / "himalaya_districts_with_chunks.geojson",
 ]
 
 FEATURES = [
@@ -54,10 +44,11 @@ CHUNK_TO_MODEL = {
     "central": BASE_DIR / "models" / "central_model.pkl",
     "eastern": BASE_DIR / "models" / "eastern_model.pkl",
 }
-CHUNK_TO_TIMESERIES = {
-    "western": BASE_DIR / "data" / "processed" / "labeled_cloudburst_district_western.csv",
-    "central": BASE_DIR / "data" / "processed" / "labeled_cloudburst_district_central.csv",
-    "eastern": BASE_DIR / "data" / "processed" / "labeled_cloudburst_district_eastern.csv",
+
+CHUNK_TO_LATEST_FEATURES = {
+    "western": BASE_DIR / "data" / "processed" / "latest_features_western.csv",
+    "central": BASE_DIR / "data" / "processed" / "latest_features_central.csv",
+    "eastern": BASE_DIR / "data" / "processed" / "latest_features_eastern.csv",
 }
 
 DB_PATH = BASE_DIR / "data" / "app_users.db"
@@ -98,6 +89,80 @@ def _tier_from_score(score_100: float) -> tuple[str, str]:
     if score_100 < 80:
         return ("ORANGE", "ORANGE")
     return ("RED", "RED")
+
+
+def _pick_district_lookup() -> Path | None:
+    for path in DISTRICT_LOOKUP_CANDIDATES:
+        if path.exists():
+            return path
+    return None
+
+
+def _load_districts() -> tuple[pd.DataFrame, str | None]:
+    lookup_path = _pick_district_lookup()
+    if lookup_path is None:
+        return pd.DataFrame(columns=["district_id", "district", "state", "chunk", "centroid_lat", "centroid_lon"]), None
+
+    if lookup_path.suffix.lower() == ".csv":
+        frame = pd.read_csv(lookup_path)
+        rename_map = {}
+        if "district_name" in frame.columns:
+            rename_map["district_name"] = "district"
+        if "shapeName" in frame.columns:
+            rename_map["shapeName"] = "district"
+        if "district_id" not in frame.columns and "shapeID" in frame.columns:
+            rename_map["shapeID"] = "district_id"
+        frame = frame.rename(columns=rename_map)
+    else:
+        with lookup_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        rows: list[dict] = []
+        for feature in payload.get("features", []):
+            props = feature.get("properties", {}) or {}
+            rows.append(
+                {
+                    "district_id": props.get("shapeID"),
+                    "district": props.get("shapeName"),
+                    "state": props.get("state", "Unknown"),
+                    "chunk": props.get("chunk"),
+                    "centroid_lat": props.get("centroid_lat"),
+                    "centroid_lon": props.get("centroid_lon"),
+                }
+            )
+        frame = pd.DataFrame(rows)
+
+    if "district" not in frame.columns:
+        raise ValueError(f"{lookup_path.name} must include a district or district_name column.")
+    if "chunk" not in frame.columns:
+        raise ValueError(f"{lookup_path.name} must include a chunk column.")
+    if "centroid_lat" not in frame.columns or "centroid_lon" not in frame.columns:
+        raise ValueError(f"{lookup_path.name} must include centroid_lat and centroid_lon columns.")
+
+    if "district_id" not in frame.columns:
+        frame["district_id"] = frame["district"]
+    if "state" not in frame.columns:
+        frame["state"] = "Unknown"
+
+    frame = frame.copy()
+    frame["district"] = frame["district"].astype(str)
+    frame["state"] = frame["state"].fillna("Unknown").astype(str)
+    frame["chunk"] = frame["chunk"].astype(str)
+    frame["centroid_lat"] = pd.to_numeric(frame["centroid_lat"], errors="coerce")
+    frame["centroid_lon"] = pd.to_numeric(frame["centroid_lon"], errors="coerce")
+    frame = frame.dropna(subset=["district", "chunk", "centroid_lat", "centroid_lon"]).reset_index(drop=True)
+    return frame[["district_id", "district", "state", "chunk", "centroid_lat", "centroid_lon"]], str(lookup_path)
+
+
+def _load_lead_time() -> dict:
+    path = BASE_DIR / "results" / "lead_time_analysis.csv"
+    if not path.exists():
+        return {"estimated_hours": None, "yellow_hr": None, "orange_hr": None, "red_hr": None}
+    df = pd.read_csv(path)
+    yellow = float(df["lead_YELLOW_hr"].median()) if "lead_YELLOW_hr" in df else None
+    orange = float(df["lead_ORANGE_hr"].median()) if "lead_ORANGE_hr" in df else None
+    red = float(df["lead_RED_hr"].median()) if "lead_RED_hr" in df else None
+    estimated = orange if orange is not None else (yellow if yellow is not None else red)
+    return {"estimated_hours": estimated, "yellow_hr": yellow, "orange_hr": orange, "red_hr": red}
 
 
 def _ensure_user_db() -> None:
@@ -151,107 +216,97 @@ def _get_user_district(user_id: str) -> dict | None:
     }
 
 
-def _pick_shapefile() -> Path | None:
-    for path in SHAPEFILE_CANDIDATES:
-        if path.exists():
-            return path
-    return None
-
-
-def _load_districts() -> tuple[gpd.GeoDataFrame, bool, str | None]:
-    shp_path = _pick_shapefile()
-    if shp_path is None:
-        return gpd.GeoDataFrame(columns=["district", "state", "geometry"], geometry="geometry", crs="EPSG:4326"), False, None
-
-    os.environ["SHAPE_RESTORE_SHX"] = "YES"
-    gdf = gpd.read_file(shp_path)
-    if gdf.crs is None:
-        gdf = gdf.set_crs("EPSG:4326")
-    else:
-        gdf = gdf.to_crs("EPSG:4326")
-
-    cols_lower = {c.lower(): c for c in gdf.columns}
-    district_col = None
-    state_col = None
-    for candidate in ["district", "district_n", "dist_name", "name", "dtname", "shapename"]:
-        if candidate in cols_lower:
-            district_col = cols_lower[candidate]
-            break
-    for candidate in ["state", "state_name", "st_nm", "stname", "province", "adm1_name"]:
-        if candidate in cols_lower:
-            state_col = cols_lower[candidate]
-            break
-
-    has_attrs = district_col is not None and state_col is not None
-    gdf["district"] = gdf[district_col].astype(str) if district_col else [f"District_{i}" for i in range(len(gdf))]
-    gdf["state"] = gdf[state_col].astype(str) if state_col else "Unknown"
-
-    centroids = gdf.to_crs("EPSG:3857").geometry.centroid.to_crs("EPSG:4326")
-    gdf["centroid_lat"] = centroids.y
-    gdf["centroid_lon"] = centroids.x
-    gdf["chunk"] = [assign_chunk(lat, lon) for lat, lon in zip(gdf["centroid_lat"], gdf["centroid_lon"])]
-    gdf = gdf[gdf["chunk"].notna()].copy()
-    return gdf[["district", "state", "chunk", "centroid_lat", "centroid_lon", "geometry"]].reset_index(drop=True), has_attrs, str(shp_path)
-
-
-def _load_models() -> dict[str, dict]:
-    output = {}
-    for chunk, path in CHUNK_TO_MODEL.items():
-        if path.exists():
-            output[chunk] = joblib.load(path)
-    return output
-
-
-def _load_lead_time() -> dict:
-    path = BASE_DIR / "results" / "lead_time_analysis.csv"
-    if not path.exists():
-        return {"estimated_hours": None, "yellow_hr": None, "orange_hr": None, "red_hr": None}
-    df = pd.read_csv(path)
-    yellow = float(df["lead_YELLOW_hr"].median()) if "lead_YELLOW_hr" in df else None
-    orange = float(df["lead_ORANGE_hr"].median()) if "lead_ORANGE_hr" in df else None
-    red = float(df["lead_RED_hr"].median()) if "lead_RED_hr" in df else None
-    estimated = orange if orange is not None else (yellow if yellow is not None else red)
-    return {"estimated_hours": estimated, "yellow_hr": yellow, "orange_hr": orange, "red_hr": red}
-
-
-DISTRICTS_GDF, HAS_DISTRICT_ATTRS, SHAPEFILE_USED = _load_districts()
-MODELS = _load_models()
+DISTRICTS_DF, DISTRICT_LOOKUP_USED = _load_districts()
 LEAD = _load_lead_time()
 _ensure_user_db()
 
 
 def _district_search(query: str) -> pd.DataFrame:
     q = query.strip().lower()
-    exact = DISTRICTS_GDF[DISTRICTS_GDF["district"].str.lower() == q]
+    exact = DISTRICTS_DF[DISTRICTS_DF["district"].str.lower() == q]
     if not exact.empty:
         return exact
-    return DISTRICTS_GDF[DISTRICTS_GDF["district"].str.lower().str.contains(q, regex=False)]
+    return DISTRICTS_DF[DISTRICTS_DF["district"].str.lower().str.contains(q, regex=False)]
 
 
-def _load_chunk_ts(chunk: str) -> pd.DataFrame:
-    path = CHUNK_TO_TIMESERIES.get(chunk)
+@lru_cache(maxsize=3)
+def _load_model_bundle(chunk: str) -> dict:
+    model_path = CHUNK_TO_MODEL.get(chunk)
+    if model_path is None or not model_path.exists():
+        raise FileNotFoundError(f"Missing model for chunk '{chunk}'.")
+    return joblib.load(model_path)
+
+
+@lru_cache(maxsize=3)
+def _load_chunk_latest_features(chunk: str) -> pd.DataFrame:
+    path = CHUNK_TO_LATEST_FEATURES.get(chunk)
     if path is None or not path.exists():
-        raise HTTPException(status_code=404, detail=f"Missing time-series file for chunk '{chunk}'.")
-    return pd.read_csv(path, parse_dates=["time"]).sort_values("time")
+        raise FileNotFoundError(
+            f"Missing precomputed latest features for chunk '{chunk}'. "
+            "Run the offline pipeline to generate latest_features_<chunk>.csv."
+        )
+    df = pd.read_csv(path)
+    if "district" not in df.columns and "district_name" in df.columns:
+        df = df.rename(columns={"district_name": "district"})
+    if "district" not in df.columns:
+        raise ValueError(f"{path.name} must include a 'district' or 'district_name' column.")
+    return df
 
 
-def _district_row_for_prediction(district: str, chunk: str) -> tuple[pd.Series, pd.DataFrame]:
-    df = _load_chunk_ts(chunk)
-    if "district_name" in df.columns:
-        local = df[df["district_name"].astype(str).str.lower() == district.lower()].copy()
-    else:
-        local = df.copy()
-    if local.empty:
-        local = df.copy()
-    local = local.sort_values("time")
-    return local.iloc[-1], local
+def load_latest_features(district: str) -> tuple[pd.Series, dict]:
+    if DISTRICTS_DF.empty:
+        raise HTTPException(status_code=404, detail="District lookup table is not loaded.")
+
+    matches = _district_search(district)
+    if matches.empty:
+        raise HTTPException(status_code=404, detail=f"District '{district}' not found.")
+
+    district_row = matches.iloc[0]
+    resolved_district = str(district_row["district"])
+    state = str(district_row["state"])
+    chunk = str(district_row["chunk"])
+    lat = float(district_row["centroid_lat"])
+    lon = float(district_row["centroid_lon"])
+
+    try:
+        latest_df = _load_chunk_latest_features(chunk)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    district_latest = latest_df[latest_df["district"].astype(str).str.lower() == resolved_district.lower()]
+    if district_latest.empty:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No latest precomputed features found for district '{resolved_district}' in chunk '{chunk}'. "
+                "Run the offline pipeline and regenerate latest features."
+            ),
+        )
+
+    row = district_latest.iloc[-1]
+    metadata = {
+        "district": resolved_district,
+        "state": state,
+        "chunk": chunk,
+        "lat": lat,
+        "lon": lon,
+    }
+    return row, metadata
+
+
+def _safe_float(row: pd.Series, key: str, default: float = 0.0) -> float:
+    value = row.get(key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _compute_contributions(row: pd.Series) -> dict[str, float]:
-    moisture = abs(float(row.get("tcwv_3h", 0.0)))
-    pressure = abs(float(row.get("sp_drop_3h", 0.0)))
-    rainfall = abs(float(row.get("rain_3h", row.get("rain_mm", 0.0))))
-    wind = abs(float(row.get("wind_speed", 0.0)))
+    moisture = abs(_safe_float(row, "tcwv_3h", _safe_float(row, "tcwv", 0.0)))
+    pressure = abs(_safe_float(row, "sp_drop_3h", 0.0))
+    rainfall = abs(_safe_float(row, "rain_3h", _safe_float(row, "rain_mm", 0.0)))
+    wind = abs(_safe_float(row, "wind_speed", 0.0))
     values = {
         "Moisture content": moisture,
         "Pressure anomaly": pressure,
@@ -262,33 +317,10 @@ def _compute_contributions(row: pd.Series) -> dict[str, float]:
     return {k: round(v * 100.0 / total, 1) for k, v in values.items()}
 
 
-def _lead_time_text(df_last10d: pd.DataFrame) -> tuple[float | None, str]:
-    if len(df_last10d) < 6:
-        return LEAD["estimated_hours"], "Insufficient recent observations; using historical median lead-time."
-
-    def _slope(series: pd.Series) -> float:
-        y = series.astype(float).to_numpy()
-        x = np.arange(len(y), dtype=float)
-        if np.allclose(y.std(), 0):
-            return 0.0
-        m = np.polyfit(x, y, 1)[0]
-        return float(m)
-
-    moisture_rate = _slope(df_last10d.get("tcwv_3h", pd.Series([0] * len(df_last10d))))
-    pressure_rate = _slope(df_last10d.get("sp_drop_3h", pd.Series([0] * len(df_last10d))))
-    rain_rate = _slope(df_last10d.get("rain_mm", pd.Series([0] * len(df_last10d))))
-
-    if moisture_rate > 0.05 and pressure_rate < -0.1 and rain_rate > 0.01:
-        return 12.0, "Current atmospheric buildup suggests elevated risk within 12-24 hours."
-    if moisture_rate > 0.02 and rain_rate > 0.005:
-        return 24.0, "Developing instability suggests possible escalation in 24-36 hours."
-    return LEAD["estimated_hours"], "Current trend does not show rapid escalation; continue routine monitoring."
-
-
 def _layman_explanation(score_100: float, row: pd.Series, lead_text: str) -> str:
-    high_moisture = float(row.get("tcwv_3h", 0.0)) > float(row.get("tcwv", 0.0))
-    pressure_drop = float(row.get("sp_drop_3h", 0.0)) < 0
-    rain_increase = float(row.get("rain_3h", row.get("rain_mm", 0.0))) > float(row.get("rain_mm", 0.0))
+    high_moisture = _safe_float(row, "tcwv_3h", 0.0) > _safe_float(row, "tcwv", 0.0)
+    pressure_drop = _safe_float(row, "sp_drop_3h", 0.0) < 0
+    rain_increase = _safe_float(row, "rain_3h", 0.0) > _safe_float(row, "rain_mm", 0.0)
 
     if score_100 >= 60 and high_moisture and pressure_drop and rain_increase:
         return (
@@ -304,31 +336,155 @@ def _layman_explanation(score_100: float, row: pd.Series, lead_text: str) -> str
     )
 
 
-def _run_recent_pipeline_stub(chunk: str, district: str) -> dict:
-    # Placeholder for live ERA5/IMERG fetch and transformation of the last 10 days.
-    # The API still uses the latest available processed chunk time-series row.
+def _build_single_point_visualization(row: pd.Series) -> tuple[dict, list[dict]]:
+    timestamp = str(row.get("feature_time", row.get("time", pd.Timestamp.utcnow().isoformat())))
+    rain = round(_safe_float(row, "rain_mm", 0.0), 4)
+    moisture = round(_safe_float(row, "tcwv_3h", _safe_float(row, "tcwv", 0.0)), 4)
+    pressure_drop = round(_safe_float(row, "sp_drop_3h", 0.0), 4)
+    wind = round(_safe_float(row, "wind_speed", 0.0), 4)
+
+    visualization = {
+        "timestamps": [timestamp],
+        "rain_trend": [rain],
+        "moisture_trend": [moisture],
+        "pressure_drop_trend": [pressure_drop],
+        "wind_convergence_trend": [wind],
+    }
+    timeline = [
+        {
+            "timestamp": timestamp,
+            "rainfall": rain,
+            "moisture": moisture,
+            "pressure_drop": pressure_drop,
+            "wind": wind,
+        }
+    ]
+    return visualization, timeline
+
+
+def _predict_for_district(district: str) -> dict:
+    row, metadata = load_latest_features(district)
+    chunk = metadata["chunk"]
+
+    try:
+        model_bundle = _load_model_bundle(chunk)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    missing_features = [f for f in FEATURES if f not in row.index]
+    if missing_features:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Latest feature file is missing required inference columns: "
+                + ", ".join(missing_features)
+            ),
+        )
+
+    x = pd.DataFrame([{f: _safe_float(row, f) for f in FEATURES}])
+    rf_model = model_bundle["rf_model"]
+    xgb_model = model_bundle["xgb_model"]
+
+    rf_prob = float(rf_model.predict_proba(x)[:, 1][0])
+    xgb_prob = float(xgb_model.predict_proba(x)[:, 1][0])
+    ensemble_prob = 0.5 * rf_prob + 0.5 * xgb_prob
+
+    score_100 = round(ensemble_prob * 100.0, 2)
+    risk_level, alert_tier = _tier_from_score(score_100)
+    risk_tier = _risk_tier_from_alert(alert_tier)
+    zone = _zone_name_from_chunk(chunk)
+
+    confidence = float(max(0.0, min(1.0, 1.0 - abs(rf_prob - xgb_prob))))
+    lead_text = "Offline batch features were refreshed from the latest 10-day atmospheric window."
+    lead_hours = LEAD["estimated_hours"]
+
+    contributions = _compute_contributions(row)
+    explanation = _layman_explanation(score_100, row, lead_text)
+    visualization, timeline = _build_single_point_visualization(row)
+
+    rainfall_spike = bool(_safe_float(row, "rain_3h", 0.0) > 1.25 * max(0.1, _safe_float(row, "rain_mm", 0.0)))
+    moisture_surge = bool(_safe_float(row, "tcwv_3h", 0.0) > _safe_float(row, "tcwv", 0.0))
+    cape_high = bool(_safe_float(row, "tcwv_6h", 0.0) > _safe_float(row, "tcwv", 0.0))
+
+    insights: list[str] = []
+    if rainfall_spike:
+        insights.append("Recent rainfall accumulation is elevated relative to baseline.")
+    if moisture_surge:
+        insights.append("Atmospheric moisture is above district baseline.")
+    if cape_high:
+        insights.append("Convective instability proxy remains elevated.")
+    if not insights:
+        insights.append("No strong precursor surge is currently detected; continue routine monitoring.")
+
     return {
-        "status": "used_cached_processed_data",
-        "note": f"Live 10-day fetch for {district} ({chunk}) is not executed in API request path.",
+        "district": metadata["district"],
+        "zone": zone,
+        "risk_tier": risk_tier,
+        "probability": round(ensemble_prob, 4),
+        "confidence": round(confidence, 4),
+        "last_updated": pd.Timestamp.utcnow().isoformat(),
+        "timeline": timeline,
+        "precursors": {
+            "rainfall_spike": rainfall_spike,
+            "moisture_surge": moisture_surge,
+            "cape_high": cape_high,
+        },
+        "insights": insights,
+        "input": {"district": district},
+        "resolved_location": {
+            "district": metadata["district"],
+            "state": metadata["state"],
+            "chunk": chunk,
+            "lat": metadata["lat"],
+            "lon": metadata["lon"],
+        },
+        "risk_score": score_100,
+        "risk_score_0_1": round(ensemble_prob, 4),
+        "risk_level": risk_level,
+        "alert_tier": alert_tier,
+        "lead_time_estimate_hours": lead_hours,
+        "lead_time_analysis": {
+            "estimated_hours": lead_hours,
+            "text": lead_text,
+            "yellow_hr": LEAD["yellow_hr"],
+            "orange_hr": LEAD["orange_hr"],
+            "red_hr": LEAD["red_hr"],
+        },
+        "model_breakdown": {
+            "rf_probability": round(rf_prob, 4),
+            "xgb_probability": round(xgb_prob, 4),
+            "ensemble_probability": round(ensemble_prob, 4),
+        },
+        "top_contributing_factors": contributions,
+        "visualization": visualization,
+        "layman_explanation": explanation,
     }
 
 
 @app.get("/health")
 def health() -> dict:
+    latest_features_status = {}
+    for chunk, path in CHUNK_TO_LATEST_FEATURES.items():
+        latest_features_status[chunk] = {
+            "path": str(path.relative_to(BASE_DIR)),
+            "exists": path.exists(),
+        }
+
     return {
         "status": "ok",
-        "shapefile_used": SHAPEFILE_USED,
-        "district_rows": int(len(DISTRICTS_GDF)),
-        "district_attributes_present": HAS_DISTRICT_ATTRS,
-        "models_loaded": sorted(MODELS.keys()),
+        "mode": "online_inference_only",
+        "district_lookup_used": DISTRICT_LOOKUP_USED,
+        "district_rows": int(len(DISTRICTS_DF)),
+        "models_available": {chunk: path.exists() for chunk, path in CHUNK_TO_MODEL.items()},
+        "latest_features_available": latest_features_status,
     }
 
 
 @app.get("/districts")
 def list_districts(q: str | None = None, limit: int = 300) -> dict:
-    if DISTRICTS_GDF.empty:
+    if DISTRICTS_DF.empty:
         return {"districts": []}
-    frame = DISTRICTS_GDF
+    frame = DISTRICTS_DF
     if q:
         frame = _district_search(q)
     frame = frame.sort_values("district").head(max(1, min(limit, 1000)))
@@ -364,8 +520,8 @@ def get_user_profile(user_id: str) -> dict:
 
 @app.post("/user-profile/select-district")
 def select_user_district(payload: UserDistrictSelection) -> dict:
-    if DISTRICTS_GDF.empty:
-        raise HTTPException(status_code=404, detail="District shapefile is not loaded.")
+    if DISTRICTS_DF.empty:
+        raise HTTPException(status_code=404, detail="District lookup table is not loaded.")
 
     matches = _district_search(payload.district)
     if matches.empty:
@@ -386,132 +542,8 @@ def select_user_district(payload: UserDistrictSelection) -> dict:
     }
 
 
-@app.post("/predict-district")
-def predict_district(payload: DistrictRequest) -> dict:
-    if DISTRICTS_GDF.empty:
-        raise HTTPException(status_code=404, detail="District shapefile is not loaded.")
-
-    matches = _district_search(payload.district)
-    if matches.empty:
-        raise HTTPException(status_code=404, detail=f"District '{payload.district}' not found.")
-
-    district_row = matches.iloc[0]
-    district = str(district_row["district"])
-    state = str(district_row["state"])
-    chunk = str(district_row["chunk"])
-    lat = float(district_row["centroid_lat"])
-    lon = float(district_row["centroid_lon"])
-
-    if chunk not in MODELS:
-        raise HTTPException(status_code=404, detail=f"Missing model models/{chunk}_model.pkl.")
-
-    pipeline_status = _run_recent_pipeline_stub(chunk, district)
-    latest_row, district_df = _district_row_for_prediction(district, chunk)
-    district_last10d = district_df[district_df["time"] >= (district_df["time"].max() - pd.Timedelta(days=10))]
-
-    model_bundle = MODELS[chunk]
-    rf_model = model_bundle["rf_model"]
-    xgb_model = model_bundle["xgb_model"]
-
-    x = pd.DataFrame([{f: float(latest_row[f]) for f in FEATURES}])
-    rf_prob = float(rf_model.predict_proba(x)[:, 1][0])
-    xgb_prob = float(xgb_model.predict_proba(x)[:, 1][0])
-    ensemble_prob = 0.5 * rf_prob + 0.5 * xgb_prob
-    score_100 = round(ensemble_prob * 100.0, 2)
-    risk_level, alert_tier = _tier_from_score(score_100)
-    risk_tier = _risk_tier_from_alert(alert_tier)
-    zone = _zone_name_from_chunk(chunk)
-    confidence = float(max(0.0, min(1.0, 1.0 - abs(rf_prob - xgb_prob))))
-    last_updated = pd.Timestamp.utcnow().isoformat()
-
-    lead_hours, lead_text = _lead_time_text(district_last10d)
-    explanation = _layman_explanation(score_100, latest_row, lead_text)
-    contributions = _compute_contributions(latest_row)
-
-    visualization = {
-        "timestamps": district_last10d["time"].dt.strftime("%Y-%m-%d %H:%M:%S").tolist(),
-        "rain_trend": district_last10d.get("rain_mm", pd.Series(dtype=float)).astype(float).fillna(0).round(4).tolist(),
-        "moisture_trend": district_last10d.get("tcwv_3h", pd.Series(dtype=float)).astype(float).fillna(0).round(4).tolist(),
-        "pressure_drop_trend": district_last10d.get("sp_drop_3h", pd.Series(dtype=float)).astype(float).fillna(0).round(4).tolist(),
-        "wind_convergence_trend": district_last10d.get("wind_speed", pd.Series(dtype=float)).astype(float).fillna(0).round(4).tolist(),
-    }
-
-    timeline = [
-        {
-            "timestamp": ts,
-            "rainfall": r,
-            "moisture": m,
-            "pressure_drop": p,
-            "wind": w,
-        }
-        for ts, r, m, p, w in zip(
-            visualization["timestamps"],
-            visualization["rain_trend"],
-            visualization["moisture_trend"],
-            visualization["pressure_drop_trend"],
-            visualization["wind_convergence_trend"],
-        )
-    ]
-
-    rainfall_spike = bool(float(latest_row.get("rain_3h", latest_row.get("rain_mm", 0.0))) > 1.5 * max(0.1, float(latest_row.get("rain_mm", 0.0))))
-    moisture_surge = bool(float(latest_row.get("tcwv_3h", 0.0)) > float(latest_row.get("tcwv", 0.0)))
-    cape_high = bool(float(latest_row.get("tcwv_6h", latest_row.get("tcwv_3h", 0.0))) > float(latest_row.get("tcwv", 0.0)))
-    precursors = {
-        "rainfall_spike": rainfall_spike,
-        "moisture_surge": moisture_surge,
-        "cape_high": cape_high,
-    }
-
-    insights: list[str] = []
-    if rainfall_spike:
-        insights.append("Rainfall intensity increased sharply over the last 48 hours.")
-    if moisture_surge:
-        insights.append("High atmospheric moisture detected over the district.")
-    if cape_high:
-        insights.append("Convective instability is rising and supports rapid storm growth.")
-    if not insights:
-        insights.append("No major precursor surge is currently detected; continue routine monitoring.")
-
-    return {
-        "district": district,
-        "zone": zone,
-        "risk_tier": risk_tier,
-        "probability": round(ensemble_prob, 4),
-        "confidence": round(confidence, 4),
-        "last_updated": last_updated,
-        "timeline": timeline,
-        "precursors": precursors,
-        "insights": insights,
-        "input": {"district": payload.district},
-        "resolved_location": {"district": district, "state": state, "chunk": chunk, "lat": lat, "lon": lon},
-        "pipeline": pipeline_status,
-        "risk_score": score_100,
-        "risk_score_0_1": round(ensemble_prob, 4),
-        "risk_level": risk_level,
-        "alert_tier": alert_tier,
-        "lead_time_estimate_hours": lead_hours,
-        "lead_time_analysis": {
-            "estimated_hours": lead_hours,
-            "text": lead_text,
-            "yellow_hr": LEAD["yellow_hr"],
-            "orange_hr": LEAD["orange_hr"],
-            "red_hr": LEAD["red_hr"],
-        },
-        "model_breakdown": {
-            "rf_probability": round(rf_prob, 4),
-            "xgb_probability": round(xgb_prob, 4),
-            "ensemble_probability": round(ensemble_prob, 4),
-        },
-        "top_contributing_factors": contributions,
-        "visualization": visualization,
-        "layman_explanation": explanation,
-    }
-
-
 @app.get("/predict")
 def predict(district: str | None = None, user_id: str | None = None) -> dict:
-    # Strict client-server contract endpoint: /predict?district=<district_name>
-    # If district is omitted, falls back to user's saved district when user_id is provided.
     selected_district = district.strip() if district else ""
     selected_user = user_id.strip() if user_id else ""
 
@@ -524,32 +556,37 @@ def predict(district: str | None = None, user_id: str | None = None) -> dict:
     if not selected_district:
         raise HTTPException(status_code=400, detail="Provide district or user_id with saved district.")
 
-    result = predict_district(DistrictRequest(district=selected_district))
+    result = _predict_for_district(selected_district)
     if selected_user:
         resolved = result.get("resolved_location", {})
-        if resolved:
-            _save_user_district(
-                selected_user,
-                str(resolved.get("district", selected_district)),
-                str(resolved.get("state", "Unknown")),
-                str(resolved.get("chunk", "")),
-            )
+        _save_user_district(
+            selected_user,
+            str(resolved.get("district", selected_district)),
+            str(resolved.get("state", "Unknown")),
+            str(resolved.get("chunk", "")),
+        )
     return result
+
+
+@app.post("/predict-district")
+def predict_district(payload: DistrictRequest) -> dict:
+    return _predict_for_district(payload.district)
 
 
 @app.post("/predict-location")
 def predict_location(payload: dict) -> dict:
-    # Backward-compatible fallback: map lat/lon to district then reuse district flow.
-    lat = float(payload.get("latitude", payload.get("lat")))
-    lon = float(payload.get("longitude", payload.get("lon")))
-    if DISTRICTS_GDF.empty:
-        raise HTTPException(status_code=404, detail="District shapefile is not loaded.")
-    point = Point(lon, lat)
-    hit = DISTRICTS_GDF[DISTRICTS_GDF.geometry.contains(point)]
-    if hit.empty:
-        cent = DISTRICTS_GDF.geometry.centroid
-        idx = int(((cent.x - lon) ** 2 + (cent.y - lat) ** 2).argmin())
-        district_name = str(DISTRICTS_GDF.iloc[idx]["district"])
-    else:
-        district_name = str(hit.iloc[0]["district"])
-    return predict_district(DistrictRequest(district=district_name))
+    lat_value = payload.get("latitude", payload.get("lat"))
+    lon_value = payload.get("longitude", payload.get("lon"))
+    if lat_value is None or lon_value is None:
+        raise HTTPException(status_code=400, detail="latitude/lat and longitude/lon are required")
+
+    if DISTRICTS_DF.empty:
+        raise HTTPException(status_code=404, detail="District lookup table is not loaded.")
+
+    lat = float(lat_value)
+    lon = float(lon_value)
+    deltas = (DISTRICTS_DF["centroid_lat"] - lat) ** 2 + (DISTRICTS_DF["centroid_lon"] - lon) ** 2
+    idx = int(deltas.argmin())
+    district_name = str(DISTRICTS_DF.iloc[idx]["district"])
+
+    return _predict_for_district(district_name)

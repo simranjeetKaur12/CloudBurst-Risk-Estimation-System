@@ -16,7 +16,10 @@ class PipelineStage {
 }
 
 class AppState extends ChangeNotifier {
-  String baseUrl = "http://10.0.2.2:8000";
+  String baseUrl = const String.fromEnvironment(
+    "CLOUDBURST_API_BASE_URL",
+    defaultValue: "https://hcis-api.onrender.com",
+  );
   bool? backendHealthy;
   bool loading = false;
   bool districtLoading = false;
@@ -62,9 +65,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> runPrediction({
-    required String district,
-  }) async {
+  Future<void> runPrediction({required String district}) async {
     loading = true;
     error = null;
     _resetPipeline();
@@ -150,7 +151,10 @@ class AppState extends ChangeNotifier {
 
   void _resetPipeline() {
     pipelineStages = _stageLabels
-        .map((label) => PipelineStage(label: label, completed: false, active: false))
+        .map(
+          (label) =>
+              PipelineStage(label: label, completed: false, active: false),
+        )
         .toList(growable: false);
   }
 

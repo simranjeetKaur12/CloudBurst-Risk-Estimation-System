@@ -10,7 +10,12 @@ class OverviewScreen extends StatefulWidget {
 }
 
 class _OverviewScreenState extends State<OverviewScreen> {
-  final urlController = TextEditingController(text: "http://10.0.2.2:8000");
+  final urlController = TextEditingController(
+    text: const String.fromEnvironment(
+      "CLOUDBURST_API_BASE_URL",
+      defaultValue: "https://hcis-api.onrender.com",
+    ),
+  );
 
   @override
   void initState() {
@@ -36,7 +41,8 @@ class _OverviewScreenState extends State<OverviewScreen> {
             decoration: const InputDecoration(
               labelText: "Backend URL",
               border: OutlineInputBorder(),
-              helperText: "Android emulator: http://10.0.2.2:8000",
+              helperText:
+                  "Override with CLOUDBURST_API_BASE_URL for local testing.",
             ),
           ),
           const SizedBox(height: 8),
@@ -51,10 +57,14 @@ class _OverviewScreenState extends State<OverviewScreen> {
               subtitle: Text(
                 state.loading
                     ? "Checking backend health..."
-                    : (state.backendHealthy == true ? "Live and connected" : "Connection unavailable"),
+                    : (state.backendHealthy == true
+                          ? "Live and connected"
+                          : "Connection unavailable"),
               ),
               trailing: Icon(
-                state.backendHealthy == true ? Icons.cloud_done : Icons.cloud_off,
+                state.backendHealthy == true
+                    ? Icons.cloud_done
+                    : Icons.cloud_off,
                 color: state.backendHealthy == true ? Colors.green : Colors.red,
               ),
             ),
@@ -74,7 +84,10 @@ class _OverviewScreenState extends State<OverviewScreen> {
           if (state.error != null)
             Padding(
               padding: const EdgeInsets.only(top: 10),
-              child: Text(state.error!, style: const TextStyle(color: Colors.red)),
+              child: Text(
+                state.error!,
+                style: const TextStyle(color: Colors.red),
+              ),
             ),
         ],
       ),
@@ -102,12 +115,20 @@ class _OverviewScreenState extends State<OverviewScreen> {
               Positioned(
                 right: -18 + 10 * t,
                 top: -12 + 8 * t,
-                child: Icon(Icons.public, size: 80, color: Colors.white.withValues(alpha: 0.15)),
+                child: Icon(
+                  Icons.public,
+                  size: 80,
+                  color: Colors.white.withValues(alpha: 0.15),
+                ),
               ),
               Positioned(
                 right: 20,
                 bottom: 8,
-                child: Icon(Icons.water_drop, size: 44, color: Colors.white.withValues(alpha: 0.18)),
+                child: Icon(
+                  Icons.water_drop,
+                  size: 44,
+                  color: Colors.white.withValues(alpha: 0.18),
+                ),
               ),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -167,7 +188,10 @@ class _InfoPill extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
