@@ -5,9 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/cloudburst_models.dart';
 import '../data/cloudburst_providers.dart';
 import '../data/cloudburst_repository.dart';
+import '../services/notification_service.dart';
 
 class CloudburstState {
   const CloudburstState({
+    required this.userId,
     required this.bootstrapping,
     required this.onboardingComplete,
     required this.notificationsEnabled,
@@ -24,6 +26,7 @@ class CloudburstState {
     required this.historyReplayIndex,
   });
 
+  final String userId;
   final bool bootstrapping;
   final bool onboardingComplete;
   final bool notificationsEnabled;
@@ -41,6 +44,7 @@ class CloudburstState {
 
   factory CloudburstState.initial() {
     return const CloudburstState(
+      userId: '',
       bootstrapping: true,
       onboardingComplete: false,
       notificationsEnabled: true,
@@ -59,6 +63,7 @@ class CloudburstState {
   }
 
   CloudburstState copyWith({
+    String? userId,
     bool? bootstrapping,
     bool? onboardingComplete,
     bool? notificationsEnabled,
@@ -78,6 +83,7 @@ class CloudburstState {
     int? historyReplayIndex,
   }) {
     return CloudburstState(
+      userId: userId ?? this.userId,
       bootstrapping: bootstrapping ?? this.bootstrapping,
       onboardingComplete: onboardingComplete ?? this.onboardingComplete,
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
@@ -110,19 +116,29 @@ class CloudburstController extends Notifier<CloudburstState> {
     state = state.copyWith(bootstrapping: true, clearError: true);
     try {
       final bootstrap = await _repository.loadBootstrapData();
+      await loadDistricts(query: bootstrap.selectedDistrict?.district ?? '');
+
+      final serverPreferred = await _repository.fetchUserPreferredDistrict(bootstrap.userId);
+      final preferredDistrict = serverPreferred ?? bootstrap.selectedDistrict;
+
       state = state.copyWith(
-        bootstrapping: false,
+        userId: bootstrap.userId,
         onboardingComplete: bootstrap.onboardingComplete,
         notificationsEnabled: bootstrap.notificationsEnabled,
         darkMode: bootstrap.darkMode,
         highContrast: bootstrap.highContrast,
-        selectedDistrict: bootstrap.selectedDistrict,
+        selectedDistrict: preferredDistrict,
         prediction: bootstrap.cachedPrediction,
         recentPredictions: bootstrap.cachedPrediction == null
             ? state.recentPredictions
             : <PredictionSnapshot>[bootstrap.cachedPrediction!],
       );
-      await loadDistricts(query: bootstrap.selectedDistrict?.district ?? '');
+
+      if (preferredDistrict != null && bootstrap.cachedPrediction == null) {
+        await runPrediction(districtOverride: preferredDistrict.district, userIdOverride: bootstrap.userId);
+      }
+
+      state = state.copyWith(bootstrapping: false);
     } catch (error) {
       state = state.copyWith(bootstrapping: false, error: error.toString());
       await loadDistricts();
@@ -146,6 +162,9 @@ class CloudburstController extends Notifier<CloudburstState> {
 
   Future<void> selectDistrict(DistrictOption district) async {
     await _repository.saveSelectedDistrict(district);
+    if (state.userId.isNotEmpty) {
+      unawaited(_repository.saveUserPreferredDistrict(userId: state.userId, district: district.district));
+    }
     state = state.copyWith(
       selectedDistrict: district,
       districtQuery: district.district,
@@ -153,8 +172,9 @@ class CloudburstController extends Notifier<CloudburstState> {
     );
   }
 
-  Future<void> runPrediction({String? districtOverride}) async {
+  Future<void> runPrediction({String? districtOverride, String? userIdOverride}) async {
     final district = districtOverride ?? state.selectedDistrict?.district;
+    final userId = userIdOverride ?? state.userId;
     if (district == null || district.trim().isEmpty) {
       state = state.copyWith(error: 'Select a district before running a prediction.');
       return;
@@ -162,7 +182,10 @@ class CloudburstController extends Notifier<CloudburstState> {
 
     state = state.copyWith(loadingPrediction: true, clearError: true);
     try {
-      final prediction = await _repository.fetchPrediction(district.trim());
+      final prediction = await _repository.fetchPredictionForUser(
+        district: district.trim(),
+        userId: userId.isEmpty ? null : userId,
+      );
       final updatedHistory = [prediction, ...state.recentPredictions.where((entry) => entry.district != prediction.district)];
       state = state.copyWith(
         loadingPrediction: false,
@@ -170,6 +193,13 @@ class CloudburstController extends Notifier<CloudburstState> {
         recentPredictions: updatedHistory.take(5).toList(growable: false),
       );
       await _repository.savePrediction(prediction);
+
+      if (state.notificationsEnabled && prediction.riskTier == RiskTier.high) {
+        await NotificationService.instance.showHighRiskAlert(
+          district: prediction.district,
+          probability: prediction.riskScore / 100,
+        );
+      }
     } catch (error) {
       final fallback = state.prediction;
       if (fallback != null) {

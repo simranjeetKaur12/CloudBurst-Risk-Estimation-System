@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../data/cloudburst_models.dart';
 import '../state/cloudburst_controller.dart';
 import '../ui/cloudburst_widgets.dart';
 
@@ -27,6 +26,8 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
     }
 
     final series = prediction.seriesByFeature[_selectedSeries] ?? const <double>[];
+    final comparisonSeries = prediction.riskTimeline.map((point) => point.riskScore).toList(growable: false);
+    final secondarySeries = series.length >= 2 && comparisonSeries.length >= 2 ? comparisonSeries : null;
     final labels = {
       'rain': 'Rainfall',
       'moisture': 'Moisture',
@@ -65,7 +66,7 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
                 title: labels[_selectedSeries] ?? _selectedSeries,
                 subtitle: 'Feature evolution across the recent 10-day processing window.',
                 values: series,
-                secondaryValues: prediction.riskTimeline.map((point) => point.riskScore).toList(growable: false),
+                secondaryValues: secondarySeries,
                 color: _seriesColor(_selectedSeries),
                 height: 150,
               ),
