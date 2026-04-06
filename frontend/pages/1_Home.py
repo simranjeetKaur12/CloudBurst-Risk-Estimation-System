@@ -1,39 +1,14 @@
-import streamlit as st
-from PIL import Image
+from pathlib import Path
+import sys
 
-st.title("🌧️ Cloudburst Risk Assessment System")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
-st.markdown(
-    """
-    ### 🚨 Problem Statement
+from home_view import render_home
+from ui import setup_page, top_nav
 
-    Cloudbursts are **high-intensity localized rainfall events** that cause
-    flash floods, landslides, and infrastructure damage—especially in
-    **mountainous regions like Uttarakhand**.
 
-    ⚠️ Existing systems:
-    - Provide **low lead-time**
-    - Lack **probabilistic uncertainty**
-    - Are not decision-oriented
-
-    ---
-    ### 🎯 Our Solution
-
-    An **AI-driven early warning system** that:
-    - Predicts **risk probability**
-    - Provides **risk tiers**
-    - Enables **early intervention**
-    """
-)
-
-st.subheader("📍 Study Area")
-
-img_study = Image.open("frontend/assets/fig1_study_area.png")
-st.image(img_study, caption="Study Area: Uttarakhand Himalayan Region", use_container_width=True)
-
-st.subheader("🧠 System Architecture")
-
-img_arch = Image.open("frontend/assets/system_architecture.png")
-st.image(img_arch, caption="End-to-End Cloudburst Risk Prediction Pipeline", use_container_width=True)
-
-st.success("➡️ Use the sidebar to explore risk dashboards and model insights.")
+setup_page("Cloudburst Risk Intelligence | Home")
+top_nav("Home")
+render_home()
