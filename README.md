@@ -18,7 +18,11 @@ HCIS is designed as an operational decision-support system, not a generic weathe
 - Feature engineering + cloudburst labeling + model training workflow
 - Chunk-specific model loading at inference time
 - District search endpoint and district prediction endpoint
+- District-to-zone geospatial boundary intelligence endpoint
+- Pipeline execution endpoint for latest 10-day operational context
 - Visualization payload for rain/moisture/pressure/wind trends
+- Historical events API with replay timeline support
+- Optional token-based authentication for deeper analytics
 - Flutter mobile app with district selection and risk dashboard UX
 
 ## Repository Structure
@@ -110,6 +114,18 @@ Response includes:
 - `POST /predict-location` with `lat/lon` or `latitude/longitude`
 - Internally resolves nearest/containing district and reuses district inference
 
+### Production API Surface (Web + Mobile)
+
+- `POST /inference/district` district-first inference with explainability payload
+- `POST /pipeline/run` run/resolve latest 10-day processed context
+- `GET /districts/{district_name}/zone` district boundary + zone metadata
+- `GET /zones` available zone-level district counts
+- `GET /model-insights?detailed=<bool>` model metrics and event detection summaries
+- `GET /historical-events` searchable historical cloudburst catalog
+- `GET /historical-events/replay?event_id=<id>` replay atmospheric progression
+- `GET /metrics` runtime request/cache counters
+- `POST /auth/token` optional bearer token for restricted advanced analytics
+
 ## Quick Start
 
 ### 1) Python Environment
@@ -129,6 +145,20 @@ uvicorn backend.app:app --host 0.0.0.0 --port 8000
 Local checks:
 - `http://127.0.0.1:8000/health`
 - `http://127.0.0.1:8000/docs`
+
+### 3) Run Web Frontend (Streamlit)
+
+```bash
+streamlit run frontend/app.py
+```
+
+Then open the app and navigate to:
+
+- Home (immersive live map intro)
+- Risk Dashboard (district-first inference + explainability)
+- Novelty and Research
+- Model Insights
+- Historical Events (replay mode)
 
 ## Flutter Mobile App
 
