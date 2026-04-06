@@ -1,0 +1,21 @@
+{
+  "chunk": "western",
+  "ensemble_weights": {
+    "rf": 0.5,
+    "xgb": 0.5
+  },
+  "features": [
+    "t2m",
+    "u10",
+    "v10",
+    "sp",
+    "tcwv",
+    "wind_speed",
+    "tcwv_3h",
+    "tcwv_6h",
+    "sp_drop_3h",
+    "t2m_grad"
+  ],
+  "train_rows": 46814,
+  "test_rows": 11704
+}

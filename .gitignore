@@ -31,8 +31,20 @@ Thumbs.db
 .hintrc
 .vscode/
 
-data/
-models/
+# Ignore all data
+data/*
+
+# Allow processed folder
+!data/processed/
+
+# Ignore everything inside processed
+data/processed/*
+
+# Allow ONLY required files
+!data/processed/latest_features_western.csv
+!data/processed/latest_features_central.csv
+!data/processed/latest_features_eastern.csv
+
 results/
 cloudburst_mobile/**/generated_*
 
