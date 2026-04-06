@@ -245,6 +245,7 @@ class TrendChart extends StatelessWidget {
           Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 14),
           SizedBox(
+            width: double.infinity,
             height: height,
             child: CustomPaint(
               painter: _LineChartPainter(
@@ -253,6 +254,7 @@ class TrendChart extends StatelessWidget {
                 secondaryValues: secondaryValues,
                 baselineColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.10),
               ),
+              child: const SizedBox.expand(),
             ),
           ),
         ],
@@ -277,10 +279,6 @@ class _LineChartPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (values.isEmpty) return;
-    final minValue = values.reduce(math.min);
-    final maxValue = values.reduce(math.max);
-    final spread = (maxValue - minValue).abs() < 1e-9 ? 1.0 : (maxValue - minValue);
-    final xStep = values.length == 1 ? 0.0 : size.width / (values.length - 1);
 
     final gridPaint = Paint()
       ..color = baselineColor
@@ -292,10 +290,19 @@ class _LineChartPainter extends CustomPainter {
 
     void drawSeries(List<double> series, Color seriesColor, {double stroke = 3}) {
       if (series.isEmpty) return;
+
+      final cleanSeries = series.where((value) => value.isFinite).toList(growable: false);
+      if (cleanSeries.isEmpty) return;
+
+      final minValue = cleanSeries.reduce(math.min);
+      final maxValue = cleanSeries.reduce(math.max);
+      final spread = (maxValue - minValue).abs() < 1e-9 ? 1.0 : (maxValue - minValue);
+      final xStep = cleanSeries.length <= 1 ? 0.0 : size.width / (cleanSeries.length - 1);
+
       final path = Path();
-      for (var index = 0; index < series.length; index++) {
+      for (var index = 0; index < cleanSeries.length; index++) {
         final x = index * xStep;
-        final y = size.height - (((series[index] - minValue) / spread) * size.height);
+        final y = size.height - (((cleanSeries[index] - minValue) / spread) * size.height);
         if (index == 0) {
           path.moveTo(x, y);
         } else {
@@ -308,7 +315,13 @@ class _LineChartPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round;
-      canvas.drawPath(path, paint);
+
+      if (cleanSeries.length == 1) {
+        final pointY = size.height - (((cleanSeries.first - minValue) / spread) * size.height);
+        canvas.drawCircle(Offset(size.width * 0.5, pointY), 4, Paint()..color = seriesColor);
+      } else {
+        canvas.drawPath(path, paint);
+      }
     }
 
     if (secondaryValues != null) {

@@ -39,3 +39,4 @@ cloudburst_mobile/**/generated_*
 *.csv
 *.pdf
 results/*.csv
+cloudburst_mobile/macos/Flutter/GeneratedPluginRegistrant.swift

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 
 import geopandas as gpd
@@ -59,9 +60,34 @@ CHUNK_TO_TIMESERIES = {
     "eastern": BASE_DIR / "data" / "processed" / "labeled_cloudburst_district_eastern.csv",
 }
 
+DB_PATH = BASE_DIR / "data" / "app_users.db"
+
 
 class DistrictRequest(BaseModel):
     district: str = Field(..., min_length=2)
+
+
+class UserDistrictSelection(BaseModel):
+    user_id: str = Field(..., min_length=8)
+    district: str = Field(..., min_length=2)
+
+
+def _zone_name_from_chunk(chunk: str) -> str:
+    chunk_norm = chunk.strip().lower()
+    if chunk_norm == "western":
+        return "Western"
+    if chunk_norm == "central":
+        return "Central"
+    return "Eastern"
+
+
+def _risk_tier_from_alert(alert_tier: str) -> str:
+    tier = alert_tier.strip().upper()
+    if tier in {"LOW", "GREEN"}:
+        return "LOW"
+    if tier in {"YELLOW", "MODERATE"}:
+        return "MODERATE"
+    return "HIGH"
 
 
 def _tier_from_score(score_100: float) -> tuple[str, str]:
@@ -72,6 +98,57 @@ def _tier_from_score(score_100: float) -> tuple[str, str]:
     if score_100 < 80:
         return ("ORANGE", "ORANGE")
     return ("RED", "RED")
+
+
+def _ensure_user_db() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id TEXT PRIMARY KEY,
+                district TEXT NOT NULL,
+                state TEXT,
+                chunk TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+
+def _save_user_district(user_id: str, district: str, state: str, chunk: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_preferences (user_id, district, state, chunk, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                district=excluded.district,
+                state=excluded.state,
+                chunk=excluded.chunk,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, district, state, chunk, pd.Timestamp.utcnow().isoformat()),
+        )
+        conn.commit()
+
+
+def _get_user_district(user_id: str) -> dict | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT user_id, district, state, chunk, updated_at FROM user_preferences WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "user_id": row[0],
+        "district": row[1],
+        "state": row[2],
+        "chunk": row[3],
+        "updated_at": row[4],
+    }
 
 
 def _pick_shapefile() -> Path | None:
@@ -140,6 +217,7 @@ def _load_lead_time() -> dict:
 DISTRICTS_GDF, HAS_DISTRICT_ATTRS, SHAPEFILE_USED = _load_districts()
 MODELS = _load_models()
 LEAD = _load_lead_time()
+_ensure_user_db()
 
 
 def _district_search(query: str) -> pd.DataFrame:
@@ -266,6 +344,48 @@ def list_districts(q: str | None = None, limit: int = 300) -> dict:
     }
 
 
+@app.get("/user-profile")
+def get_user_profile(user_id: str) -> dict:
+    if not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    profile = _get_user_district(user_id.strip())
+    if profile is None:
+        return {"user_id": user_id.strip(), "preferred_district": None}
+    return {
+        "user_id": profile["user_id"],
+        "preferred_district": {
+            "district": profile["district"],
+            "state": profile["state"],
+            "chunk": profile["chunk"],
+            "updated_at": profile["updated_at"],
+        },
+    }
+
+
+@app.post("/user-profile/select-district")
+def select_user_district(payload: UserDistrictSelection) -> dict:
+    if DISTRICTS_GDF.empty:
+        raise HTTPException(status_code=404, detail="District shapefile is not loaded.")
+
+    matches = _district_search(payload.district)
+    if matches.empty:
+        raise HTTPException(status_code=404, detail=f"District '{payload.district}' not found.")
+
+    district_row = matches.iloc[0]
+    district = str(district_row["district"])
+    state = str(district_row["state"])
+    chunk = str(district_row["chunk"])
+    _save_user_district(payload.user_id.strip(), district, state, chunk)
+    return {
+        "user_id": payload.user_id.strip(),
+        "selected": {
+            "district": district,
+            "state": state,
+            "chunk": chunk,
+        },
+    }
+
+
 @app.post("/predict-district")
 def predict_district(payload: DistrictRequest) -> dict:
     if DISTRICTS_GDF.empty:
@@ -299,6 +419,10 @@ def predict_district(payload: DistrictRequest) -> dict:
     ensemble_prob = 0.5 * rf_prob + 0.5 * xgb_prob
     score_100 = round(ensemble_prob * 100.0, 2)
     risk_level, alert_tier = _tier_from_score(score_100)
+    risk_tier = _risk_tier_from_alert(alert_tier)
+    zone = _zone_name_from_chunk(chunk)
+    confidence = float(max(0.0, min(1.0, 1.0 - abs(rf_prob - xgb_prob))))
+    last_updated = pd.Timestamp.utcnow().isoformat()
 
     lead_hours, lead_text = _lead_time_text(district_last10d)
     explanation = _layman_explanation(score_100, latest_row, lead_text)
@@ -312,7 +436,52 @@ def predict_district(payload: DistrictRequest) -> dict:
         "wind_convergence_trend": district_last10d.get("wind_speed", pd.Series(dtype=float)).astype(float).fillna(0).round(4).tolist(),
     }
 
+    timeline = [
+        {
+            "timestamp": ts,
+            "rainfall": r,
+            "moisture": m,
+            "pressure_drop": p,
+            "wind": w,
+        }
+        for ts, r, m, p, w in zip(
+            visualization["timestamps"],
+            visualization["rain_trend"],
+            visualization["moisture_trend"],
+            visualization["pressure_drop_trend"],
+            visualization["wind_convergence_trend"],
+        )
+    ]
+
+    rainfall_spike = bool(float(latest_row.get("rain_3h", latest_row.get("rain_mm", 0.0))) > 1.5 * max(0.1, float(latest_row.get("rain_mm", 0.0))))
+    moisture_surge = bool(float(latest_row.get("tcwv_3h", 0.0)) > float(latest_row.get("tcwv", 0.0)))
+    cape_high = bool(float(latest_row.get("tcwv_6h", latest_row.get("tcwv_3h", 0.0))) > float(latest_row.get("tcwv", 0.0)))
+    precursors = {
+        "rainfall_spike": rainfall_spike,
+        "moisture_surge": moisture_surge,
+        "cape_high": cape_high,
+    }
+
+    insights: list[str] = []
+    if rainfall_spike:
+        insights.append("Rainfall intensity increased sharply over the last 48 hours.")
+    if moisture_surge:
+        insights.append("High atmospheric moisture detected over the district.")
+    if cape_high:
+        insights.append("Convective instability is rising and supports rapid storm growth.")
+    if not insights:
+        insights.append("No major precursor surge is currently detected; continue routine monitoring.")
+
     return {
+        "district": district,
+        "zone": zone,
+        "risk_tier": risk_tier,
+        "probability": round(ensemble_prob, 4),
+        "confidence": round(confidence, 4),
+        "last_updated": last_updated,
+        "timeline": timeline,
+        "precursors": precursors,
+        "insights": insights,
         "input": {"district": payload.district},
         "resolved_location": {"district": district, "state": state, "chunk": chunk, "lat": lat, "lon": lon},
         "pipeline": pipeline_status,
@@ -337,6 +506,35 @@ def predict_district(payload: DistrictRequest) -> dict:
         "visualization": visualization,
         "layman_explanation": explanation,
     }
+
+
+@app.get("/predict")
+def predict(district: str | None = None, user_id: str | None = None) -> dict:
+    # Strict client-server contract endpoint: /predict?district=<district_name>
+    # If district is omitted, falls back to user's saved district when user_id is provided.
+    selected_district = district.strip() if district else ""
+    selected_user = user_id.strip() if user_id else ""
+
+    if not selected_district and selected_user:
+        profile = _get_user_district(selected_user)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="No saved district found for this user_id.")
+        selected_district = str(profile["district"])
+
+    if not selected_district:
+        raise HTTPException(status_code=400, detail="Provide district or user_id with saved district.")
+
+    result = predict_district(DistrictRequest(district=selected_district))
+    if selected_user:
+        resolved = result.get("resolved_location", {})
+        if resolved:
+            _save_user_district(
+                selected_user,
+                str(resolved.get("district", selected_district)),
+                str(resolved.get("state", "Unknown")),
+                str(resolved.get("chunk", "")),
+            )
+    return result
 
 
 @app.post("/predict-location")

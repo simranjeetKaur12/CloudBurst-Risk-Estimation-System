@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'screens/district_picker_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/shell_screen.dart';
+import 'services/notification_service.dart';
 import 'state/cloudburst_controller.dart';
 import 'ui/cloudburst_theme.dart';
 
@@ -18,11 +19,22 @@ class CloudburstApp extends StatelessWidget {
   }
 }
 
-class _CloudburstAppView extends ConsumerWidget {
+class _CloudburstAppView extends ConsumerStatefulWidget {
   const _CloudburstAppView();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_CloudburstAppView> createState() => _CloudburstAppViewState();
+}
+
+class _CloudburstAppViewState extends ConsumerState<_CloudburstAppView> {
+  @override
+  void initState() {
+    super.initState();
+    NotificationService.instance.initialize();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(cloudburstControllerProvider);
     return MaterialApp(
       debugShowCheckedModeBanner: false,
