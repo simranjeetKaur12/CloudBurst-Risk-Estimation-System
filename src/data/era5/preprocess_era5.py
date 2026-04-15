@@ -113,6 +113,7 @@ def main():
     base_dir = Path(args.raw_dir) / region_key
     instant_dir = base_dir / "instant"
     accum_dir = base_dir / "accum"
+    flat_dir = base_dir
 
     # Backward compatibility for older layout:
     # data/raw/era5/{instant,accum} (without per-region folder)
@@ -123,11 +124,16 @@ def main():
         accum_dir = legacy_base / "accum"
 
     logging.info("Region: %s | Area: %s", region_key, bbox)
-    logging.info("Processing ERA5 instant directory: %s", instant_dir)
-    df_instant = process_directory(str(instant_dir), start_time, end_time, north, west, south, east, "mean")
+    if instant_dir.exists() and accum_dir.exists():
+        logging.info("Processing ERA5 instant directory: %s", instant_dir)
+        df_instant = process_directory(str(instant_dir), start_time, end_time, north, west, south, east, "mean")
 
-    logging.info("Processing ERA5 accum directory: %s", accum_dir)
-    df_accum = process_directory(str(accum_dir), start_time, end_time, north, west, south, east, "sum")
+        logging.info("Processing ERA5 accum directory: %s", accum_dir)
+        df_accum = process_directory(str(accum_dir), start_time, end_time, north, west, south, east, "sum")
+    else:
+        logging.info("Processing ERA5 flat directory: %s", flat_dir)
+        df_instant = process_directory(str(flat_dir), start_time, end_time, north, west, south, east, "mean")
+        df_accum = process_directory(str(flat_dir), start_time, end_time, north, west, south, east, "sum")
 
     if df_instant is not None and df_accum is not None:
         df = df_instant.join(df_accum, how="inner")

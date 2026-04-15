@@ -30,6 +30,7 @@ def main() -> None:
     if not args.skip_download:
         for chunk in CHUNKS:
             run(root, "src/pipelines/offline/download_era5.py", "--region", chunk, "--days", str(args.days))
+            run(root, "src/data/era5/unzip_era5.py", "--region", chunk)
         run(root, "src/pipelines/offline/download_imerg.py", "--days", str(args.days))
 
     for chunk in CHUNKS:

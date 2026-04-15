@@ -64,7 +64,7 @@ def main() -> None:
 
     client = cdsapi.Client()
     for year, month, days in _month_segments(start_date, end_date):
-        out_file = out_root / f"era5_{region_key}_{year}_{month:02d}_latest.nc"
+        out_file = out_root / f"era5_{region_key}_{year}_{month:02d}_latest.zip"
         request = {
             "product_type": "reanalysis",
             "variable": VARIABLES,
@@ -73,7 +73,8 @@ def main() -> None:
             "day": days,
             "time": [f"{h:02d}:00" for h in range(24)],
             "area": [north, west, south, east],
-            "format": "netcdf",
+            "data_format": "netcdf",
+            "download_format": "unarchived",
         }
         client.retrieve("reanalysis-era5-single-levels", request, str(out_file))
 
