@@ -28,11 +28,14 @@ jobs:
           pip install -r requirements.txt
 
       - name: Configure CDS API credentials
-        if: ${{ secrets.CDSAPI_URL != '' && secrets.CDSAPI_KEY != '' }}
+        env:
+          CDSAPI_URL: ${{ secrets.CDSAPI_URL }}
+          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
+        if: ${{ env.CDSAPI_URL != '' && env.CDSAPI_KEY != '' }}
         run: |
           cat <<EOF > ~/.cdsapirc
-          url: ${{ secrets.CDSAPI_URL }}
-          key: ${{ secrets.CDSAPI_KEY }}
+          url: $CDSAPI_URL
+          key: $CDSAPI_KEY
           EOF
 
       - name: Run daily offline batch pipeline
