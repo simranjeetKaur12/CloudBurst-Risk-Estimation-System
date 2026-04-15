@@ -29,8 +29,13 @@ st.markdown(f"Service state: {status_text(True)}", unsafe_allow_html=True)
 metric_strip(
     [
         ("District Rows", str(health.get("district_rows", "NA"))),
-        ("Shapefile", str(health.get("shapefile_used", "NA"))),
-        ("Models Loaded", ", ".join(health.get("models_loaded", [])) or "None"),
+        ("Lookup Source", str(health.get("district_lookup_used", health.get("shapefile_used", "NA")))),
+        (
+            "Models Loaded",
+            ", ".join(health.get("models_loaded", []))
+            or ", ".join([k for k, v in health.get("models_available", {}).items() if v])
+            or "None",
+        ),
         ("District Attributes", str(health.get("district_attributes_present", "NA"))),
     ]
 )

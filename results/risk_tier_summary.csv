@@ -1,0 +1,2 @@
+region,rows,events,red_threshold,orange_threshold,yellow_threshold,recall_red,recall_red_orange,recall_all_tiers,avg_alerts_per_month_red_orange
+uttarakhand,11704,458,0.9621635162830358,0.943903626203537,0.23047570884227753,0.30131004366812225,0.517467248908297,0.9781659388646288,2.4081632653061225

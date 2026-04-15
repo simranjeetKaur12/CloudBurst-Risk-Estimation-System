@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import json
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -52,6 +53,8 @@ CHUNK_TO_LATEST_FEATURES = {
 }
 
 DB_PATH = BASE_DIR / "data" / "app_users.db"
+RESULTS_DIR = BASE_DIR / "results"
+HISTORIC_EVENTS_PATH = BASE_DIR / "data" / "historic_events.csv"
 
 
 class DistrictRequest(BaseModel):
@@ -154,7 +157,7 @@ def _load_districts() -> tuple[pd.DataFrame, str | None]:
 
 
 def _load_lead_time() -> dict:
-    path = BASE_DIR / "results" / "lead_time_analysis.csv"
+    path = RESULTS_DIR / "lead_time_analysis.csv"
     if not path.exists():
         return {"estimated_hours": None, "yellow_hr": None, "orange_hr": None, "red_hr": None}
     df = pd.read_csv(path)
@@ -362,6 +365,78 @@ def _build_single_point_visualization(row: pd.Series) -> tuple[dict, list[dict]]
     return visualization, timeline
 
 
+def _results_csv(name: str) -> Path:
+    return RESULTS_DIR / name
+
+
+def _clean_json_value(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except Exception:
+            pass
+    return value
+
+
+def _frame_records(df: pd.DataFrame) -> list[dict]:
+    records: list[dict] = []
+    for row in df.to_dict(orient="records"):
+        records.append({str(key): _clean_json_value(value) for key, value in row.items()})
+    return records
+
+
+def _load_result_records(file_name: str) -> list[dict]:
+    path = _results_csv(file_name)
+    if not path.exists():
+        return []
+    return _frame_records(pd.read_csv(path))
+
+
+def _load_historic_events() -> pd.DataFrame:
+    if not HISTORIC_EVENTS_PATH.exists():
+        return pd.DataFrame(columns=["event_id", "date", "location", "district", "state", "severity"])
+
+    frame = pd.read_csv(HISTORIC_EVENTS_PATH)
+    rename_map = {
+        "Date": "date",
+        "Location": "location",
+        "District": "district",
+        "State": "state",
+        "Latitude": "latitude",
+        "Longitude": "longitude",
+        "Time": "time",
+        "Deaths": "deaths",
+        "Injured": "injured",
+        "Missing": "missing",
+        "Description": "description",
+        "Season": "season",
+        "Severity": "severity",
+        "Region": "region",
+        "Elevation_Zone": "elevation_zone",
+    }
+    frame = frame.rename(columns=rename_map).copy()
+    frame.insert(0, "event_id", range(1, len(frame) + 1))
+    if "date" in frame.columns:
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce", dayfirst=True)
+    return frame
+
+
+def _load_replay_events() -> pd.DataFrame:
+    path = _results_csv("lead_time_analysis.csv")
+    if not path.exists():
+        return pd.DataFrame(columns=["event_id", "event_date", "location", "state", "severity"])
+
+    frame = pd.read_csv(path).copy()
+    frame.insert(0, "event_id", range(1, len(frame) + 1))
+    if "event_date" in frame.columns:
+        frame["event_date"] = pd.to_datetime(frame["event_date"], errors="coerce")
+    return frame
+
+
 def _predict_for_district(district: str) -> dict:
     row, metadata = load_latest_features(district)
     chunk = metadata["chunk"]
@@ -470,13 +545,21 @@ def health() -> dict:
             "exists": path.exists(),
         }
 
+    models_loaded = [chunk for chunk, path in CHUNK_TO_MODEL.items() if path.exists()]
+    district_attributes_present = bool(
+        {"district", "state", "chunk", "centroid_lat", "centroid_lon"}.issubset(DISTRICTS_DF.columns)
+    )
+
     return {
         "status": "ok",
         "mode": "online_inference_only",
         "district_lookup_used": DISTRICT_LOOKUP_USED,
+        "shapefile_used": DISTRICT_LOOKUP_USED,
         "district_rows": int(len(DISTRICTS_DF)),
         "models_available": {chunk: path.exists() for chunk, path in CHUNK_TO_MODEL.items()},
+        "models_loaded": models_loaded,
         "latest_features_available": latest_features_status,
+        "district_attributes_present": district_attributes_present,
     }
 
 
@@ -573,6 +656,11 @@ def predict_district(payload: DistrictRequest) -> dict:
     return _predict_for_district(payload.district)
 
 
+@app.post("/inference/district")
+def inference_district(payload: DistrictRequest) -> dict:
+    return _predict_for_district(payload.district)
+
+
 @app.post("/predict-location")
 def predict_location(payload: dict) -> dict:
     lat_value = payload.get("latitude", payload.get("lat"))
@@ -590,3 +678,95 @@ def predict_location(payload: dict) -> dict:
     district_name = str(DISTRICTS_DF.iloc[idx]["district"])
 
     return _predict_for_district(district_name)
+
+
+@app.get("/model-insights")
+@app.get("/insights/model")
+def model_insights(detailed: bool = False) -> dict:
+    models = _load_result_records("model_performance.csv")
+    chunk_metrics = _load_result_records("chunk_ensemble_performance.csv")
+    probability_samples = _load_result_records("risk_probabilities.csv")
+
+    payload = {
+        "models": models,
+        "zone_metrics": chunk_metrics,
+        "probability_samples": probability_samples if detailed else probability_samples[:200],
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+    }
+    return payload
+
+
+@app.get("/historical-events")
+@app.get("/events/historical")
+def historical_events(
+    district: str = "",
+    state: str = "",
+    severity: str = "",
+    limit: int = 200,
+) -> dict:
+    frame = _load_historic_events()
+    if district.strip():
+        frame = frame[frame["district"].astype(str).str.contains(district.strip(), case=False, na=False)]
+    if state.strip():
+        frame = frame[frame["state"].astype(str).str.contains(state.strip(), case=False, na=False)]
+    if severity.strip():
+        frame = frame[frame["severity"].astype(str).str.lower() == severity.strip().lower()]
+
+    if "date" in frame.columns:
+        frame = frame.sort_values("date", ascending=False, na_position="last")
+
+    return {"events": _frame_records(frame.head(max(1, min(limit, 1000))))}
+
+
+@app.get("/historical-events/replay")
+@app.get("/events/replay")
+def replay_event(event_id: int) -> dict:
+    events = _load_replay_events()
+    if events.empty:
+        raise HTTPException(status_code=404, detail="No replayable historical events available.")
+
+    match = events[events["event_id"] == event_id]
+    if match.empty:
+        raise HTTPException(status_code=404, detail=f"Historical event {event_id} not found.")
+
+    row = match.iloc[0]
+    location = str(row.get("location", "")).strip()
+    replay_payload = {str(key): _clean_json_value(value) for key, value in row.items()}
+
+    district_name = location.split("(")[0].strip()
+    prediction = None
+    if district_name:
+        try:
+            prediction = _predict_for_district(district_name)
+        except HTTPException:
+            prediction = None
+
+    return {
+        "event": replay_payload,
+        "resolved_district": district_name or None,
+        "prediction": prediction,
+        "message": (
+            "Replay uses the archived event registry plus the closest district prediction available in the current "
+            "online inference dataset."
+        ),
+    }
+
+
+@app.post("/pipeline")
+@app.post("/pipeline/run")
+def pipeline_run(payload: dict) -> dict:
+    district = str(payload.get("district", "")).strip()
+    if not district:
+        raise HTTPException(status_code=400, detail="district is required")
+
+    result = _predict_for_district(district)
+    response = {
+        "mode": "online_inference_only",
+        "requested_refresh": bool(payload.get("force_refresh", False)),
+        "message": (
+            "Offline pipeline execution is not exposed from the hosted API. "
+            "This compatibility route returns the latest precomputed district inference."
+        ),
+    }
+    response.update(result)
+    return response

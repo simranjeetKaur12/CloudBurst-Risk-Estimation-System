@@ -1,6 +1,5 @@
 # Data
 data/raw/
-data/processed/*.csv
 data/processed/*.nc
 data/processed/*.h5
 data/processed/*.HDF5
@@ -33,6 +32,7 @@ Thumbs.db
 
 # Ignore all data
 data/*
+!data/historic_events.csv
 
 # Allow processed folder
 !data/processed/
@@ -40,15 +40,17 @@ data/*
 # Ignore everything inside processed
 data/processed/*
 
-# Allow ONLY required files
+# Allow runtime lookup and feature snapshots required for deployed inference
+!data/processed/himalaya_district_lookup.csv
+!data/processed/himalaya_districts_with_chunks.geojson
 !data/processed/latest_features_western.csv
 !data/processed/latest_features_central.csv
 !data/processed/latest_features_eastern.csv
 
-results/
-cloudburst_mobile/**/generated_*
+# Keep deployment-time evaluation artifacts for Streamlit pages
+results/*
+!results/*.csv
 
-*.csv
+cloudburst_mobile/**/generated_*
 *.pdf
-results/*.csv
 cloudburst_mobile/macos/Flutter/GeneratedPluginRegistrant.swift

@@ -30,6 +30,10 @@ def _load_insights_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         payload = model_insights(detailed=True)
         if payload.get("models"):
             perf_df = pd.DataFrame(payload["models"])
+        if payload.get("zone_metrics"):
+            chunk_df = pd.DataFrame(payload["zone_metrics"])
+        if payload.get("probability_samples"):
+            prob_df = pd.DataFrame(payload["probability_samples"])
     except ApiError:
         pass
 
