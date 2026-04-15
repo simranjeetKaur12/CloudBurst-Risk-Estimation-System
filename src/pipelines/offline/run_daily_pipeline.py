@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 CHUNKS = ["western", "central", "eastern"]
@@ -26,6 +27,9 @@ def run(root: Path, *args: str) -> None:
 def main() -> None:
     args = parse_args()
     root = Path(__file__).resolve().parents[3]
+    now = datetime.utcnow()
+    start = (now - timedelta(days=max(1, args.days))).strftime("%Y-%m-%d")
+    end = now.strftime("%Y-%m-%d")
 
     if not args.skip_download:
         for chunk in CHUNKS:
@@ -45,6 +49,10 @@ def main() -> None:
             DISTRICTS_FILE,
             "--district_region_col",
             "chunk",
+            "--start",
+            start,
+            "--end",
+            end,
         )
 
     run(root, "src/pipelines/offline/generate_latest_features.py", "--days", str(args.days))
