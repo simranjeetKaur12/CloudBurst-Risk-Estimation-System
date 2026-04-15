@@ -8,7 +8,7 @@ data/processed/*.HDF5
 reports/Model figures/*.png
 
 # Models
-models/*.pkl
+
 models/*.joblib
 
 # Python
