@@ -1,7 +1,10 @@
 import argparse
+import logging
 import subprocess
 import sys
 from pathlib import Path
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -27,8 +30,30 @@ def parse_args():
     return parser.parse_args()
 
 
+def _build_zero_imerg_hourly(region: str) -> Path:
+    era5_path = ROOT / f"data/processed/era5_district_features_{region}.csv"
+    out_path = ROOT / f"data/processed/imerg_hourly_district_{region}.csv"
+    if not era5_path.exists():
+        raise FileNotFoundError(f"Cannot create IMERG fallback without ERA5 district features: {era5_path}")
+
+    era5 = pd.read_csv(era5_path, parse_dates=["time"])
+    required = [col for col in ["region", "district_id", "district_name", "time"] if col in era5.columns]
+    if "region" not in required:
+        era5["region"] = region
+        required = [col for col in ["region", "district_id", "district_name", "time"] if col in era5.columns]
+
+    fallback = era5[required].copy()
+    fallback["rain_mm"] = 0.0
+    fallback = fallback.sort_values(required).reset_index(drop=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fallback.to_csv(out_path, index=False)
+    logging.warning("IMERG unavailable for %s. Wrote zero-rain fallback -> %s", region, out_path)
+    return out_path
+
+
 def main():
     args = parse_args()
+    logging.basicConfig(level=logging.INFO)
 
     common = [
         "--region",
@@ -51,16 +76,20 @@ def main():
         "--end",
         args.end,
     )
-    run("src/data/district/extract_imerg_district_halfhourly.py", *common)
-    run(
-        "src/data/imerg/aggregate_imerg.py",
-        "--region",
-        args.region,
-        "--input_csv",
-        f"data/processed/imerg_halfhourly_district_{args.region}.csv",
-        "--output_csv",
-        f"data/processed/imerg_hourly_district_{args.region}.csv",
-    )
+    try:
+        run("src/data/district/extract_imerg_district_halfhourly.py", *common)
+        run(
+            "src/data/imerg/aggregate_imerg.py",
+            "--region",
+            args.region,
+            "--input_csv",
+            f"data/processed/imerg_halfhourly_district_{args.region}.csv",
+            "--output_csv",
+            f"data/processed/imerg_hourly_district_{args.region}.csv",
+        )
+    except RuntimeError as exc:
+        logging.warning("District IMERG extraction failed for %s: %s", args.region, exc)
+        _build_zero_imerg_hourly(args.region)
 
     merge_args = [
         "--regions",
