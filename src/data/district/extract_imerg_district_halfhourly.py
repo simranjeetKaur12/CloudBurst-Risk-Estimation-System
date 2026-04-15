@@ -52,6 +52,9 @@ def main():
     )
 
     raw_root = Path(args.raw_dir) / args.region
+    legacy_raw_root = Path(args.raw_dir)
+    if not raw_root.exists() and legacy_raw_root.exists():
+        raw_root = legacy_raw_root
     files = sorted(glob.glob(str(raw_root / "**/*.HDF5"), recursive=True))
     if not files:
         raise FileNotFoundError(f"No IMERG HDF5 files found under {raw_root}")

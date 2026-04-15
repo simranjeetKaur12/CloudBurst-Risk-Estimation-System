@@ -111,17 +111,47 @@ if ts:
 
     col_a, col_b = st.columns([1.6, 1], gap="large")
     with col_a:
-        if HAS_PLOTLY:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=trend_df["time"], y=trend_df["Rainfall"], mode="lines", name="Rainfall"))
-            fig.add_trace(go.Scatter(x=trend_df["time"], y=trend_df["Moisture"], mode="lines", name="Moisture"))
-            fig.add_trace(go.Scatter(x=trend_df["time"], y=trend_df["Pressure Drop"], mode="lines", name="Pressure Drop"))
-            fig.add_trace(go.Scatter(x=trend_df["time"], y=trend_df["Wind"], mode="lines", name="Wind"))
-            fig.update_layout(title="10-Day Precursor Trend")
-            st.plotly_chart(style_plotly_figure(fig, height=370), use_container_width=True)
+        if len(trend_df) == 1:
+            snapshot_df = pd.DataFrame(
+                {
+                    "signal": ["Rainfall", "Moisture", "Pressure Drop", "Wind"],
+                    "value": [
+                        float(trend_df["Rainfall"].iloc[0]),
+                        float(trend_df["Moisture"].iloc[0]),
+                        float(trend_df["Pressure Drop"].iloc[0]),
+                        float(trend_df["Wind"].iloc[0]),
+                    ],
+                }
+            )
+            if HAS_PLOTLY:
+                fig = px.bar(
+                    snapshot_df,
+                    x="signal",
+                    y="value",
+                    color="signal",
+                    color_discrete_sequence=["#7dd3fc", "#2563eb", "#fca5a5", "#b91c1c"],
+                    title="Latest Precursor Snapshot",
+                )
+                st.plotly_chart(style_plotly_figure(fig, height=370), use_container_width=True)
+            else:
+                st.markdown("### Latest Precursor Snapshot")
+                st.bar_chart(snapshot_df.set_index("signal")["value"], use_container_width=True)
+            st.caption(
+                "The current hosted feature files contain one latest snapshot per district, not a full 10-day time series. "
+                "This chart shows the latest available precursor values."
+            )
         else:
-            st.markdown("### 10-Day Precursor Trend")
-            st.line_chart(trend_df.set_index("time")[["Rainfall", "Moisture", "Pressure Drop", "Wind"]], use_container_width=True)
+            if HAS_PLOTLY:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=trend_df["time"], y=trend_df["Rainfall"], mode="lines", name="Rainfall"))
+                fig.add_trace(go.Scatter(x=trend_df["time"], y=trend_df["Moisture"], mode="lines", name="Moisture"))
+                fig.add_trace(go.Scatter(x=trend_df["time"], y=trend_df["Pressure Drop"], mode="lines", name="Pressure Drop"))
+                fig.add_trace(go.Scatter(x=trend_df["time"], y=trend_df["Wind"], mode="lines", name="Wind"))
+                fig.update_layout(title="10-Day Precursor Trend")
+                st.plotly_chart(style_plotly_figure(fig, height=370), use_container_width=True)
+            else:
+                st.markdown("### 10-Day Precursor Trend")
+                st.line_chart(trend_df.set_index("time")[["Rainfall", "Moisture", "Pressure Drop", "Wind"]], use_container_width=True)
 
     with col_b:
         factors = result.get("top_contributing_factors", {})

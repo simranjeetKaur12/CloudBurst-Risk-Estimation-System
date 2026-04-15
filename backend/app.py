@@ -256,7 +256,7 @@ def _load_chunk_latest_features(chunk: str) -> pd.DataFrame:
     return df
 
 
-def load_latest_features(district: str) -> tuple[pd.Series, dict]:
+def load_latest_features(district: str) -> tuple[pd.Series, pd.DataFrame, dict]:
     if DISTRICTS_DF.empty:
         raise HTTPException(status_code=404, detail="District lookup table is not loaded.")
 
@@ -286,6 +286,15 @@ def load_latest_features(district: str) -> tuple[pd.Series, dict]:
             ),
         )
 
+    if "feature_time" in district_latest.columns:
+        district_latest = district_latest.copy()
+        district_latest["_sort_time"] = pd.to_datetime(district_latest["feature_time"], errors="coerce")
+        district_latest = district_latest.sort_values("_sort_time").drop(columns="_sort_time")
+    elif "time" in district_latest.columns:
+        district_latest = district_latest.copy()
+        district_latest["_sort_time"] = pd.to_datetime(district_latest["time"], errors="coerce")
+        district_latest = district_latest.sort_values("_sort_time").drop(columns="_sort_time")
+
     row = district_latest.iloc[-1]
     metadata = {
         "district": resolved_district,
@@ -294,7 +303,7 @@ def load_latest_features(district: str) -> tuple[pd.Series, dict]:
         "lat": lat,
         "lon": lon,
     }
-    return row, metadata
+    return row, district_latest.reset_index(drop=True), metadata
 
 
 def _safe_float(row: pd.Series, key: str, default: float = 0.0) -> float:
@@ -339,29 +348,43 @@ def _layman_explanation(score_100: float, row: pd.Series, lead_text: str) -> str
     )
 
 
-def _build_single_point_visualization(row: pd.Series) -> tuple[dict, list[dict]]:
-    timestamp = str(row.get("feature_time", row.get("time", pd.Timestamp.utcnow().isoformat())))
-    rain = round(_safe_float(row, "rain_mm", 0.0), 4)
-    moisture = round(_safe_float(row, "tcwv_3h", _safe_float(row, "tcwv", 0.0)), 4)
-    pressure_drop = round(_safe_float(row, "sp_drop_3h", 0.0), 4)
-    wind = round(_safe_float(row, "wind_speed", 0.0), 4)
+def _build_visualization(history: pd.DataFrame) -> tuple[dict, list[dict]]:
+    timestamps: list[str] = []
+    rain_trend: list[float] = []
+    moisture_trend: list[float] = []
+    pressure_drop_trend: list[float] = []
+    wind_trend: list[float] = []
+    timeline: list[dict] = []
+
+    for _, row in history.iterrows():
+        timestamp = str(row.get("feature_time", row.get("time", pd.Timestamp.utcnow().isoformat())))
+        rain = round(_safe_float(row, "rain_mm", 0.0), 4)
+        moisture = round(_safe_float(row, "tcwv_3h", _safe_float(row, "tcwv", 0.0)), 4)
+        pressure_drop = round(_safe_float(row, "sp_drop_3h", 0.0), 4)
+        wind = round(_safe_float(row, "wind_speed", 0.0), 4)
+
+        timestamps.append(timestamp)
+        rain_trend.append(rain)
+        moisture_trend.append(moisture)
+        pressure_drop_trend.append(pressure_drop)
+        wind_trend.append(wind)
+        timeline.append(
+            {
+                "timestamp": timestamp,
+                "rainfall": rain,
+                "moisture": moisture,
+                "pressure_drop": pressure_drop,
+                "wind": wind,
+            }
+        )
 
     visualization = {
-        "timestamps": [timestamp],
-        "rain_trend": [rain],
-        "moisture_trend": [moisture],
-        "pressure_drop_trend": [pressure_drop],
-        "wind_convergence_trend": [wind],
+        "timestamps": timestamps,
+        "rain_trend": rain_trend,
+        "moisture_trend": moisture_trend,
+        "pressure_drop_trend": pressure_drop_trend,
+        "wind_convergence_trend": wind_trend,
     }
-    timeline = [
-        {
-            "timestamp": timestamp,
-            "rainfall": rain,
-            "moisture": moisture,
-            "pressure_drop": pressure_drop,
-            "wind": wind,
-        }
-    ]
     return visualization, timeline
 
 
@@ -438,7 +461,7 @@ def _load_replay_events() -> pd.DataFrame:
 
 
 def _predict_for_district(district: str) -> dict:
-    row, metadata = load_latest_features(district)
+    row, history, metadata = load_latest_features(district)
     chunk = metadata["chunk"]
 
     try:
@@ -475,7 +498,7 @@ def _predict_for_district(district: str) -> dict:
 
     contributions = _compute_contributions(row)
     explanation = _layman_explanation(score_100, row, lead_text)
-    visualization, timeline = _build_single_point_visualization(row)
+    visualization, timeline = _build_visualization(history)
 
     rainfall_spike = bool(_safe_float(row, "rain_3h", 0.0) > 1.25 * max(0.1, _safe_float(row, "rain_mm", 0.0)))
     moisture_surge = bool(_safe_float(row, "tcwv_3h", 0.0) > _safe_float(row, "tcwv", 0.0))

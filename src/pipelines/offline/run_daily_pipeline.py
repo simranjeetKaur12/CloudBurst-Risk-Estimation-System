@@ -5,7 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-REGIONS = ["himalayan_west", "uttarakhand", "sikkim"]
+CHUNKS = ["western", "central", "eastern"]
+DISTRICTS_FILE = "data/processed/himalaya_districts_with_chunks.geojson"
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,16 +28,24 @@ def main() -> None:
     root = Path(__file__).resolve().parents[3]
 
     if not args.skip_download:
-        for region in REGIONS:
-            run(root, "src/pipelines/offline/download_era5.py", "--region", region, "--days", str(args.days))
+        for chunk in CHUNKS:
+            run(root, "src/pipelines/offline/download_era5.py", "--region", chunk, "--days", str(args.days))
         run(root, "src/pipelines/offline/download_imerg.py", "--days", str(args.days))
 
-    for region in REGIONS:
-        run(root, "src/pipelines/offline/preprocess_era5.py", "--region", region, "--days", str(args.days))
-        run(root, "src/pipelines/offline/preprocess_imerg.py", "--region", region)
+    for chunk in CHUNKS:
+        run(root, "src/pipelines/offline/preprocess_era5.py", "--region", chunk, "--days", str(args.days))
+        run(root, "src/pipelines/offline/preprocess_imerg.py", "--region", chunk)
+        run(
+            root,
+            "src/data/district/build_district_dataset.py",
+            "--region",
+            chunk,
+            "--districts_file",
+            DISTRICTS_FILE,
+            "--district_region_col",
+            "chunk",
+        )
 
-    run(root, "src/pipelines/offline/merge_era5_imerg.py", "--regions", *REGIONS)
-    run(root, "src/features/build_features.py")
     run(root, "src/pipelines/offline/generate_latest_features.py", "--days", str(args.days))
 
 

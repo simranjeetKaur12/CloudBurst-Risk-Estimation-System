@@ -23,11 +23,11 @@ def _load_event_table() -> pd.DataFrame:
         events = historical_events(limit=400)
         if events:
             df = pd.DataFrame(events)
-            rename = {
-                "district": "location",
-                "tier": "severity",
-            }
-            return df.rename(columns=rename)
+            if "tier" in df.columns and "severity" not in df.columns:
+                df = df.rename(columns={"tier": "severity"})
+            if "location" not in df.columns and "district" in df.columns:
+                df = df.rename(columns={"district": "location"})
+            return df
     except ApiError:
         pass
 
@@ -115,6 +115,7 @@ with right:
             st.bar_chart(pivot, use_container_width=True)
 
 show_cols = [c for c in ["date", "event_date", location_col, "state", severity_col, "lead_YELLOW_hr", "lead_ORANGE_hr", "lead_RED_hr"] if c and c in events_df.columns]
+show_cols = list(dict.fromkeys(show_cols))
 st.markdown("### Event Registry")
 st.dataframe(events_df[show_cols].sort_values(show_cols[0], ascending=False), use_container_width=True, hide_index=True)
 

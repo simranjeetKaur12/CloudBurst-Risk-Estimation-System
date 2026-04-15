@@ -63,6 +63,48 @@ def _compute_summary(group: pd.DataFrame, district_col: str, chunk: str, days: i
     return row
 
 
+def _compute_recent_rows(group: pd.DataFrame, district_col: str, chunk: str, days: int) -> list[dict]:
+    g = group.sort_values("time").copy()
+    latest = g.iloc[-1]
+    last_time = pd.to_datetime(latest["time"])
+    window = g[g["time"] >= (last_time - pd.Timedelta(days=days))].copy()
+    if window.empty:
+        return []
+
+    rain_series = pd.to_numeric(window.get("rain_mm", pd.Series(index=window.index, dtype=float)), errors="coerce").fillna(0.0)
+    window["rain_mean_10d"] = float(rain_series.mean())
+    window["rain_total_10d"] = float(rain_series.sum())
+    window["district"] = str(latest[district_col])
+    window["chunk"] = chunk
+    window["feature_time"] = pd.to_datetime(window["time"]).dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+    output_cols = [
+        "district",
+        "chunk",
+        "feature_time",
+        "time",
+        "rain_mean_10d",
+        "rain_total_10d",
+        "t2m",
+        "u10",
+        "v10",
+        "sp",
+        "tcwv",
+        "wind_speed",
+        "tcwv_3h",
+        "tcwv_6h",
+        "sp_drop_3h",
+        "t2m_grad",
+        "rain_mm",
+        "rain_3h",
+    ]
+    for col in output_cols:
+        if col not in window.columns:
+            window[col] = 0.0
+
+    return window[output_cols].to_dict(orient="records")
+
+
 def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
@@ -81,28 +123,30 @@ def main() -> None:
         try:
             district_col = _district_col(df)
             rows = [
-                _compute_summary(group, district_col, chunk, args.days)
+                row
                 for _, group in df.groupby(district_col, sort=False)
                 if not group.empty
+                for row in _compute_recent_rows(group, district_col, chunk, args.days)
             ]
         except ValueError:
             if df.empty:
                 raise
             if chunk not in district_lookup or not district_lookup[chunk]:
                 raise
-            single = _compute_summary(df, "time", chunk, args.days)
+            recent_rows = _compute_recent_rows(df, "time", chunk, args.days)
             rows = [
                 {
-                    **single,
+                    **row,
                     "district": district_name,
                 }
                 for district_name in district_lookup[chunk]
+                for row in recent_rows
             ]
 
-        latest_df = pd.DataFrame(rows).sort_values("district").reset_index(drop=True)
+        latest_df = pd.DataFrame(rows).sort_values(["district", "feature_time"]).reset_index(drop=True)
         out_path = output_dir / f"latest_features_{chunk}.csv"
         latest_df.to_csv(out_path, index=False)
-        print(f"Saved {out_path} ({len(latest_df)} districts)")
+        print(f"Saved {out_path} ({len(latest_df)} rows)")
 
 
 if __name__ == "__main__":
