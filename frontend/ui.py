@@ -520,14 +520,14 @@ def style_plotly_figure(fig, height: int = 320):
         zerolinecolor=DIVIDER_COLOR,
         linecolor=BORDER_COLOR,
         tickfont=dict(color=SECONDARY_TEXT),
-        titlefont=dict(color=SECONDARY_TEXT),
+        title=dict(font=dict(color=SECONDARY_TEXT)),
     )
     fig.update_yaxes(
         gridcolor=BORDER_COLOR,
         zerolinecolor=DIVIDER_COLOR,
         linecolor=BORDER_COLOR,
         tickfont=dict(color=SECONDARY_TEXT),
-        titlefont=dict(color=SECONDARY_TEXT),
+        title=dict(font=dict(color=SECONDARY_TEXT)),
     )
     return fig
 
